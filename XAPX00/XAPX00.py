@@ -22,6 +22,7 @@ import serial
 import logging
 import math
 import time
+from functools import wraps
 
 testing = 0
 
@@ -56,6 +57,7 @@ def stereo(func):
     method, both the input and output channels (params 1 & 2) will be
     incremented.
     """
+    @wraps(func)
     def stereoFunc(*args, **kwargs):
         # trying to find a way to have a method
         # calling another method not do the stereo repeat

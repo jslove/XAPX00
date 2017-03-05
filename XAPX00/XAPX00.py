@@ -25,20 +25,23 @@ import time
 
 testing = 0
 
+
 _LOGGER = logging.getLogger(__name__)
-# out_hdlr = logging.StreamHandler(sys.stdout)
-# out_hdlr.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
-# out_hdlr.setLevel(logging.DEBUG)
-# _LOGGER.addHandler(out_hdlr)
-# _LOGGER.setLevel(logging.DEBUG)
+if 1:
+    import sys
+    out_hdlr = logging.StreamHandler(sys.stdout)
+    out_hdlr.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+    out_hdlr.setLevel(logging.DEBUG)
+    _LOGGER.addHandler(out_hdlr)
+    _LOGGER.setLevel(logging.DEBUG)
 
 # Global Constants
 XAP800_CMD = "#5"
 XAP400_CMD = "#7"
 XAP800Type = "XAP800"
 XAP400Type = "XAP400"
-AP800_LOCATION_PREFIX = "AP800"
-AP800_UNIT_TYPE = 1
+XAP800_LOCATION_PREFIX = "XAP800"
+XAP800_UNIT_TYPE = 1
 EOM = "\r"
 DEVICE_MAXMICS = "Max Number of Microphones"
 
@@ -121,7 +124,7 @@ class XAPX00(object):
 
     def connect(self):
         """Open serial port and check connection."""
-        _LOGGER.info("Connecting to APX00 at " + str(self.baudRate) +
+        _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
                      " baud...")
         self.serial = serial.Serial(self.comPort, self.baudRate,
                                     timeout=self.timeout)
@@ -173,6 +176,7 @@ class XAPX00(object):
             resp = self.serial.readline()
             if resp[0:5].decode() == "ERROR":
                 self.serial.readline()  # clear the trailing "\r\n"
+                self.reset()
                 raise Exception(resp)
             _LOGGER.debug("Response %s" % resp.decode())
             if resp[:-1] != ">\r\n":
@@ -192,9 +196,9 @@ class XAPX00(object):
 
     @stereo
     def setDecayRate(self, channel, decayRate, unitCode=0):
-        """Modify the decay rate for the specified AP800.
+        """Modify the decay rate for the specified XAP800.
 
-        unitCode:   the unit code of the target AP800
+        unitCode:   the unit code of the target XAP800
         channel:    1-8
         decayRate:  the rate of decay
                        1 = slow, 2 = medium, 3 = fast
@@ -210,10 +214,10 @@ class XAPX00(object):
 
     @stereo
     def getDecayRate(self, channel, unitCode=0):
-        """Request the decay rate for the specified AP800.
+        """Request the decay rate for the specified XAP800.
 
         channel: 1-8
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send("%s%s %s %s %s" %
                   (XAP800_CMD, unitCode, "DECAY", channel, EOM))
@@ -223,7 +227,7 @@ class XAPX00(object):
     def setEchoCanceller(self, channel, isEnabled=True, unitCode=0):
         """Enable/Disable the echo canceller.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
@@ -235,7 +239,7 @@ class XAPX00(object):
     def getEchoCanceller(self, channel, unitCode=0):
         """Enable or disable the echo canceller for the channel-unit.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
@@ -279,7 +283,7 @@ class XAPX00(object):
 
         Gain input is on a linear scale of 0-1, with 1=maxgain
         """
-        maxdb = self.getMaxGain(channel, group, unitCode, _stereo=0)
+        maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
         gain = linear2db(gain, maxdb)  # if self.convertDb else gain
         self.send("%s%s %s %s %s %s %s %s" %
                   (XAP800_CMD, unitCode, "GAIN", channel, group,
@@ -298,9 +302,9 @@ class XAPX00(object):
 
     @stereo
     def setGain(self, channel, gain, isAbsolute=1, group="I", unitCode=0):
-        """Sets the gain on the specified channel for the specified AP800.
+        """Sets the gain on the specified channel for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, A-D, 1-2, or * for all)
         channelType - the type of channel (I for input, O for output,
                                            S for subbus)
@@ -317,7 +321,7 @@ class XAPX00(object):
 
     @stereo
     def getLevel(self, channel, group="I", stage="I", unitCode=0):
-        """Requests the db level of the target channel on the specified AP800.
+        """Requests the db level of the target channel on the specified XAP800.
 
         read-only
 
@@ -340,12 +344,12 @@ class XAPX00(object):
                          outGroup="O", unitCode=0):
         """Set the routing matrix for the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         inChannel - the target input channel or group (1-25 see
-                    page 64 of the AP800 manual for
+                    page 64 of the XAP800 manual for
                     details)
         outChannel - the target output channel or group (1-25 see
-                    page 64 of the AP800 manual for
+                    page 64 of the XAP800 manual for
                     details)
         inGroup - input group (I-inlts, M=mics, L=line, ...
         outGroup - otput group (O=all Outputs 1-12, P=processing A-H, ...
@@ -363,9 +367,9 @@ class XAPX00(object):
         """Gets the routing matrix for the target channel
 
         Args:
-            unitCode - the unit code of the target AP800
+            unitCode - the unit code of the target XAP800
             inChannel - the target input channel (1-25 see
-                    page 64 of the AP800 manual for
+                    page 64 of the XAP800 manual for
                     details)
             outChannel - a hex value specifying the output mix as a
                  series of bit flags (again, see pg 64).
@@ -386,12 +390,12 @@ class XAPX00(object):
                        isAbsolute=1, inGroup="I", outGroup="O", unitCode=0):
         """Sets the matrix level at the crosspoint.
 
-        unitCode:   the unit code of the target AP800
+        unitCode:   the unit code of the target XAP800
         inChannel:  the target input channel or group (1-25 see
-                    page 64 of the AP800 manual for
+                    page 64 of the XAP800 manual for
                     details)
         outChannel: the target output channel or group (1-25 see
-                    page 64 of the AP800 manual for
+                    page 64 of the XAP800 manual for
                     details)
         inGroup:  input group (I-inlts, M=mics, L=line, ...
         outGroup: output group (O=all Outputs 1-12, P=processing A-H, ...
@@ -411,9 +415,9 @@ class XAPX00(object):
         """
         Gets the matrix level at the crosspoint
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         inChannel - the target input channel (1-12 see
-                page 64 of the AP800 manual for
+                page 64 of the XAP800 manual for
                 details)
         outChannel - target output channel, 1-12
         inGroup - input group (I-inlts, M=mics, L=line, ...
@@ -427,10 +431,10 @@ class XAPX00(object):
 
     @stereo
     def setMute(self, channel, isMuted=1, group="I", unitCode=0):
-        """Mutes the target channel on the specified AP800.
+        """Mutes the target channel on the specified XAP800.
 
         Args:
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8 or *, A-D, 1-2)
         group -   I=Input, O=Output, M=Mike, etc
         isMuted - 1 to mute, 0 to unmute, 2 to toggle
@@ -442,10 +446,10 @@ class XAPX00(object):
 
     @stereo
     def getMute(self, channel, group="I", unitCode=0):
-        """Mutes the target channel on the specified AP800.
+        """Mutes the target channel on the specified XAP800.
 
         Args:
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8 or *, A-D, 1-2)
         group -   I=Input, O=Output, M=Mike, etc
         Return:
@@ -469,11 +473,11 @@ class XAPX00(object):
         return int(self.readResponse())
 
     def getUniqueId(self, unitCode=0):
-        """Requests the unique ID of the target AP800.
+        """Requests the unique ID of the target XAP800.
 
         This is a hex value preprogrammed at the factory.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + str(unitCode) + " UID" + EOM)
         return self.readResponse()
@@ -483,7 +487,7 @@ class XAPX00(object):
         """Modifies the state of the adaptive ambient for the specified microphone(s).
 
         Args:
-            unitCode - the unit code of the target AP800
+            unitCode - the unit code of the target XAP800
             channel - 1-8 for specific mic channel, or * for all mics
             group:  "M"ike, "O"utput, "I"nput, etc
             isEnabled - 1 to enable, 0 to disable
@@ -496,7 +500,7 @@ class XAPX00(object):
     def getAdaptiveAmbient(self, channel, group="M", unitCode=0):
         """Requests the state of the adaptive ambient for the specified mic(s).
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - 1-8 for specific mic channel, or * for all mics
         """
         self.send("%s %s %s %s %s" %
@@ -506,7 +510,7 @@ class XAPX00(object):
     def setAutoGainControl(self, channel, isEnabled, group="I", unitCode=0):
         """Modifies the state of the automatic gain control (AGC) for the mic(s).
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - 1-8 for specific mic channel, or * for all mics
         isEnabled - true to enable, false to disable
         """
@@ -517,7 +521,7 @@ class XAPX00(object):
     def getAutoGainControl(self, channel, group="I", unitCode=0):
         """Requests the state of the automatic gain control (AGC) for the mic.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - 1-8 for specific mic channel, or * for all mics
         """
         self.send(XAP800_CMD + unitCode + " AGC " + channel + " " +
@@ -530,7 +534,7 @@ class XAPX00(object):
         This value will only be set if adaptive ambient is disabled.
 
         Args:
-            unitCode - the unit code of the target AP800
+            unitCode - the unit code of the target XAP800
             levelInDb - the ambient level in dB (0 to -70)
         """
         # Ensure compliance with level boundary conditions
@@ -547,16 +551,16 @@ class XAPX00(object):
 
         Args:
             channel: mic channel 1-9
-            unitCode - the unit code of the target AP800
+            unitCode - the unit code of the target XAP800
         """
         self.send("%s%s %s %s %s" %
                   (XAP800_CMD, unitCode, "AMBLVL", channel, EOM))
         return float(self.readResponse())
 
     def baudRate(self, baudRate, unitCode=0):
-        """Set the baud rate for the RS232 port on the specified AP800.
+        """Set the baud rate for the RS232 port on the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         baudRate - the baud rate (9600, 19200, or 38400)
         """
         baudRateCode = {9600: 1, 19200: 2, 38400: 3, " ": " "}
@@ -570,7 +574,7 @@ class XAPX00(object):
     def setChairmanOverride(self, channel, isEnabled=0, unitCode=0):
         """Modifies the state of the chairman override for the specified microphone(s).
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - 1-8 for specific mic channel, or * for all mics
         isEnabled - 0=off, 1=om, 2=toggle
         """
@@ -581,7 +585,7 @@ class XAPX00(object):
     def getChairmanOverride(self, channel, isEnabled=0, unitCode=0):
         """Modifies the state of the chairman override a microphone(s).
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - 1-8 for specific mic channel, or * for all mics
         isEnabled - 0=off, 1=om, 2=toggle
         """
@@ -607,20 +611,20 @@ class XAPX00(object):
         return int(self.readResponse())
 
     def usePreset(self, preset, unitCode=0):
-        """Cause the AP800 to swap its settings for the given preset.
+        """Cause the XAP800 to swap its settings for the given preset.
 
         Args:
-            unitCode - the unit code of the target AP800
+            unitCode - the unit code of the target XAP800
             preset - the preset to switch to (1-6)
         """
         self.send(XAP800_CMD + unitCode + " PRESET " + preset + EOM)
         return int(self.readResponse())
 
     def requestPreset(self, preset, unitCode=0):
-        """Request the current preset in use for the specified AP800.
+        """Request the current preset in use for the specified XAP800.
 
         Args:
-            unitCode - the unit code of the target AP800
+            unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " PRESET" + EOM)
         return int(self.readResponse())
@@ -628,7 +632,7 @@ class XAPX00(object):
     def requestEchoCanceller(self, channel, unitCode=0):
         """Request the status of the echo canceller.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel
         """
         self.send("{}{} {} {} {}".format(XAP800_CMD, unitCode,
@@ -638,7 +642,7 @@ class XAPX00(object):
     def getEchoReturnLoss(self, channel, unitCode=0):
         """Request the status of the echo return loss.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel
         """
         self.send("{}{} {} {} {}".format(XAP800_CMD, unitCode,
@@ -648,7 +652,7 @@ class XAPX00(object):
     def getEchoReturnLossEnhancement(self, channel, unitCode=0):
         """Request the status of the echo return loss enhancement.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel
         """
         self.send(XAP800_CMD + unitCode + " ERLE " + channel + EOM)
@@ -657,7 +661,7 @@ class XAPX00(object):
     def enableEqualizer(self, channel, isEnabled=True, unitCode=0):
         """Enable or disable the equalizer for channel-unit.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
@@ -668,7 +672,7 @@ class XAPX00(object):
     def setDefaultMeter(self, channel, isInput, unitCode=0):
         """Modify the default meter.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the input or output to set as the meter
                   (1-8 or A-D)
         isInput - true if the channel is an input, false
@@ -681,7 +685,7 @@ class XAPX00(object):
     def getDefaultMeter(self, unitCode=0):
         """Request the default meter.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " DFLTM " + EOM)
         return int(self.readResponse())
@@ -689,7 +693,7 @@ class XAPX00(object):
     def toggleEqualizer(self, channel, unitCode=0):
         """Toggle the equalizer for the specified channel-unit.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " EQ " + channel + " 2" + EOM)
@@ -698,7 +702,7 @@ class XAPX00(object):
     def requestEqualizer(self, channel, unitCode=0):
         """Request the status of the equalizer for channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " EQ " + channel + EOM)
@@ -707,7 +711,7 @@ class XAPX00(object):
     def enableHardwareFlowControl(self, isEnabled=True, unitCode=0):
         """Enables or disables hardware flow control for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         isEnabled - true to enable the channel, false to disable
         """
         self.send(XAP800_CMD + unitCode + " FLOW " +
@@ -717,7 +721,7 @@ class XAPX00(object):
     def requestHardwareFlowControl(self, unitCode=0):
         """Request the status of the hardware flow control for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         isEnabled - true to enable the channel, false to disable
         """
         self.send(XAP800_CMD + unitCode + " FLOW " + EOM)
@@ -726,7 +730,7 @@ class XAPX00(object):
     def enableFirstMicPriorityMode(self, isEnabled=True, unitCode=0):
         """Enable or disable first microphone priority mode.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         isEnabled - true to enable the channel, false to disable
         """
         self.send(XAP800_CMD + unitCode + " FMP " +
@@ -736,41 +740,41 @@ class XAPX00(object):
     def requestFirstMicPriorityMode(self, unitCode=0):
         """Request the first microphone priority mode.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         isEnabled - true to enable the channel, false to disable
         """
         self.send(XAP800_CMD + unitCode + " FMP " + EOM)
         return int(self.readResponse())
 
     def setFrontPanelPasscode(self, passcode, unitCode=0):
-        """Set the front panel passcode for the specified AP800.
+        """Set the front panel passcode for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         passcode - the passcode to use for the front panel
         """
         self.send(XAP800_CMD + unitCode + " FPP " + passcode + EOM)
         return int(self.readResponse())
 
     def requestFrontPanelPasscode(self, unitCode=0):
-        """Request the front panel passcode for the specified AP800.
+        """Request the front panel passcode for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " FPP " + EOM)
         return int(self.readResponse())
 
     def requestGate(self, unitCode):
-        """Request the gating status for the specified AP800.
+        """Request the gating status for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " GATE " + EOM)
         return int(self.readResponse())
 
     def setGatingMode(self, channel, mode, unitCode=0):
-        """Set the gating mode on the specified channel for the specified AP800.
+        """Set the gating mode on the specified channel for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         mode - the gating mode
                1 = AUTO
@@ -784,9 +788,9 @@ class XAPX00(object):
         return int(self.readResponse())
 
     def requestGatingMode(self, channel, unitCode=0):
-        """Request the gating mode on the specified channel for the specified AP800.
+        """Request the gating mode on the specified channel for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " GMODE " + channel + EOM)
@@ -798,7 +802,7 @@ class XAPX00(object):
         The ratio is limited to 0-50 values outside the boundary
         will be anchored to the boundaries.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         gateRatioInDb - the gating ratio in dB (0-50)
         """
         # Ensure compliance with level boundary conditions
@@ -811,20 +815,20 @@ class XAPX00(object):
         return float(self.readResponse())
 
     def requestGateRatio(self, unitCode=0):
-        """Request the gating ratio for the specified AP800.
+        """Request the gating ratio for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " GRATIO" + EOM)
         return float(self.readResponse())
 
     def setHoldTime(self, holdTimeInMs, unitCode=0):
-        """Set the hold time for the specified AP800.
+        """Set the hold time for the specified XAP800.
 
         The value is limited to 100-8000 values outside the boundary
         will be anchored to the boundaries.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         holdTimeInMs - the hold time in milliseconds (100-8000)
         """
         # Ensure compliance with level boundary conditions
@@ -833,9 +837,9 @@ class XAPX00(object):
         return int(self.readResponse())
 
     def setFrontPanelLock(self, isLocked=True, unitCode=0):
-        """Lock or unlock the front panel of the specifid AP800
+        """Lock or unlock the front panel of the specifid XAP800
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         isLocked - true to lock, false to unlock
         """
         self.send(XAP800_CMD + unitCode + " LFP " +
@@ -843,26 +847,26 @@ class XAPX00(object):
         return bool(self.readResponse())
 
     def toggleFrontPanelLock(self, unitCode=0):
-        """Toggles the front panel lock of the specified AP800
+        """Toggles the front panel lock of the specified XAP800
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " LFP 2" + EOM)
         return int(self.readResponse())
 
     def requestFrontPanelLock(self, unitCode):
         """
-        Requests the front panel lock status of the specified AP800
+        Requests the front panel lock status of the specified XAP800
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " LFP" + EOM)
         return int(self.readResponse())
 
     def setLastMicOnMode(self, mode, unitCode=0):
-        """Set the last microphone on mode of the specified AP800
+        """Set the last microphone on mode of the specified XAP800
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         mode - the last mic on mode
                                  0 = OFF
                                  1 = Microphone #1
@@ -872,17 +876,17 @@ class XAPX00(object):
         return int(self.readResponse())
 
     def requestLastMicOnMode(self, unitCode=0):
-        """Request the last microphone on mode of the specified AP800
+        """Request the last microphone on mode of the specified XAP800
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " LMO" + EOM)
         return int(self.readResponse())
 
     def setMasterMode(self, mode, unitCode=0):
-        """Set the master mode of the specified AP800.
+        """Set the master mode of the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         mode - the master mode
                                  1 = Master Single
                                  2 = Dual Mixer
@@ -893,17 +897,17 @@ class XAPX00(object):
         return int(self.readResponse())
 
     def requestMasterMode(self, unitCode=0):
-        """Request the master mode of the specified AP800.
+        """Request the master mode of the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " MASTER " + EOM)
         return int(self.readResponse())
 
     def enableModemMode(self, unitCode, isEnabled=True):
-        """Enable or disable the modem mode of the specified AP800
+        """Enable or disable the modem mode of the specified XAP800
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         isEnabled - true to enable, false to disable
         """
         self.send(XAP800_CMD + unitCode + " MDMODE " +
@@ -913,7 +917,7 @@ class XAPX00(object):
     def setMicEqualizerAdjustment(self, unitCode, channel, band, eqValue):
         """Set the microphone equalizer adjustment of the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         band - H=High, M=Medium, L=Low
         eqValue - the eq value (-12 to 12)
@@ -925,7 +929,7 @@ class XAPX00(object):
     def requestMicEqualizerAdjustment(self, channel, band, unitCode=0):
         """Requests the microphone equalizer adjustment of the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         band - H=High, M=Medium, L=Low
         """
@@ -935,7 +939,7 @@ class XAPX00(object):
     def enableMicHighPassFilter(self, channel, isEnabled=True, unitCode=0):
         """Enable or disables the microphone high pass filter of the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable, false to disable
         """
@@ -946,16 +950,16 @@ class XAPX00(object):
     def requestMicHighPassFilter(self, channel, unitCode=0):
         """Request the microphone high pass filter of the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " MHP " + channel + " " + EOM)
         return bool(self.readResponse())
 
     def setModemInitString(self, initString, unitCode=0):
-        """Set the modem initialization string of the specified AP800.
+        """Set the modem initialization string of the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         initString - the string to use when initializing the modem
         """
         self.send(XAP800_CMD + unitCode + " MINIT " + initString + EOM)
@@ -964,7 +968,7 @@ class XAPX00(object):
     def setMicInputGain(self, unitCode, channel, gain):
         """Set the microphone input gain for the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         gain - the gain value to use
                                  1 = 55dB
@@ -978,7 +982,7 @@ class XAPX00(object):
     def requestMicInputGain(self, channel, unitCode=0):
         """Request the microphone input gain for the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " MLINE " + channel + EOM)
@@ -987,7 +991,7 @@ class XAPX00(object):
     def setMaxActiveMics(self, maxMics, unitCode=0):
         """Set the maxmimum number of active microphones.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         maxMics - the maximum number of mics that will be active
               at the same time (1-8, or 0 for no limit)
 
@@ -1002,15 +1006,15 @@ class XAPX00(object):
     def requestMaxActiveMics(self, unitCode=0):
         """Request the maxmimum number of active microphones
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " MMAX" + EOM)
         return int(self.readResponse())
 
     def setModemModePassword(self, modemPassword, unitCode=0):
-        """Set the modem password for the specified AP800.
+        """Set the modem password for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         modemPassword - the modem password
         """
         self.send(XAP800_CMD + unitCode + " MPASS " + modemPassword + EOM)
@@ -1019,7 +1023,7 @@ class XAPX00(object):
     def setMicEchoCancellerReference(self, channel, ecRef, unitCode=0):
         """Set the microphone echo canceller reference channel
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         ecRef - the reference channel
                 1 = EC Ref 1
@@ -1032,7 +1036,7 @@ class XAPX00(object):
     def requestMicEchoCancellerReference(self, channel, unitCode=0):
         """Request the microphone echo canceller reference channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " MREF " + channel + EOM)
@@ -1041,7 +1045,7 @@ class XAPX00(object):
     def setNonlinearProcessingMode(self, channel, nlpMode, unitCode=0):
         """Set the nonlinear processing (NLP) mode of the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         nlpMode - the NLP mode to use
             0 = OFF
@@ -1056,7 +1060,7 @@ class XAPX00(object):
     def requestNonlinearProcessingMode(self, channel, unitCode=0):
         """Request the nonlinear processing (NLP) mode of the channel-unit.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " NLP " + channel + EOM)
@@ -1066,7 +1070,7 @@ class XAPX00(object):
                                         unitCode=0):
         """Enable or disable NOM attenuation for the target channel-unit.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable NOM, false to disable
         """
@@ -1077,19 +1081,19 @@ class XAPX00(object):
     def requestNumberOpenMicsAttenuation(self, channel, unitCode=0):
         """Request the NOM attenuation for the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " NOM " + channel + EOM)
         return float(self.readResponse())
 
     def setOffAttenuation(self, attenuation, unitCode=0):
-        """Set the off attenuation for the specified AP800.
+        """Set the off attenuation for the specified XAP800.
 
         The value is limited to 0-50 values outside the boundary
         will be anchored to the boundaries.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         attenuation - the attenuation in dB (0-50)
         """
         if attenuation < 0:
@@ -1100,9 +1104,9 @@ class XAPX00(object):
         return int(self.readResponse())
 
     def requestOffAttenuation(self, unitCode=0):
-        """Request the off attenuation for the specified AP800.
+        """Request the off attenuation for the specified XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " OFFA" + EOM)
         return int(self.readResponse())
@@ -1110,7 +1114,7 @@ class XAPX00(object):
     def enablePaAdaptiveMode(self, isEnabled=True, unitCode=0):
         """Enable or disable PA adaptive mode.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         isEnabled - true to enable, false to disable
         """
         self.send(XAP800_CMD + unitCode + " PAA " +
@@ -1120,7 +1124,7 @@ class XAPX00(object):
     def requestPaAdaptiveMode(self, unitCode=0):
         """Request the PA adaptive mode.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " PAA" + EOM)
         return self.readResponse()
@@ -1128,9 +1132,9 @@ class XAPX00(object):
     def setControlPinCommand(self, pinLocation, command, unitCode=0):
         """Specifies the command to be executed when the GPIO pin/control occurs.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         pinLocation - the pin location (see pg 67 of the
-                  AP800 manual for specifications)
+                  XAP800 manual for specifications)
         command - the command to execute (any of LFP,
                                     PRESET, MUTE, GAIN, AGC, EQ, GMODE,
                                           or CHAIRO)
@@ -1142,9 +1146,9 @@ class XAPX00(object):
     def clearControlPinCommand(self, pinLocation, unitCode=0):
         """Clear any commands set for the the GPIO pin/control specified.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         pinLocation - the pin location (see pg 67 of the
-                  AP800 manual for specifications)
+                  XAP800 manual for specifications)
         """
         self.setControlPinCommand(unitCode, pinLocation, "CLEAR")
         return int(self.readResponse())
@@ -1152,9 +1156,9 @@ class XAPX00(object):
     def requestControlPinCommand(self, pinLocation, unitCode=0):
         """Request the command to be executed when the GPIO pin/control occurs.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         pinLocation - the pin location (see pg 67 of the
-                  AP800 manual for specifications)
+                  XAP800 manual for specifications)
         """
         self.send(XAP800_CMD + unitCode + " PCMD " + pinLocation + EOM)
         return self.readResponse()
@@ -1162,9 +1166,9 @@ class XAPX00(object):
     def setStatusPinCommand(self, pinLocation, command, unitCode=0):
         """Specifie the command to be executed when the GPIO pin/status occurs.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         pinLocation - the pin location (see pg 67 of the
-                  AP800 manual for specifications)
+                  XAP800 manual for specifications)
         command - the command to execute (any of LFP,
                                     PRESET, MUTE, GAIN, AGC, EQ, GMODE,
                                           or CHAIRO)
@@ -1176,9 +1180,9 @@ class XAPX00(object):
     def clearStatusPinCommand(self, pinLocation, unitCode=0):
         """Clear any commands set for the GPIO pin/status specified.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         pinLocation - the pin location (see pg 67 of the
-                  AP800 manual for specifications)
+                  XAP800 manual for specifications)
         """
         self.setStatusPinCommand(unitCode, pinLocation, "CLEAR")
         return int(self.readResponse())
@@ -1186,9 +1190,9 @@ class XAPX00(object):
     def requestStatusPinCommand(self, pinLocation, unitCode=0):
         """Request the command to be executed when the GPIO pin/status occurs.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         pinLocation - the pin location (see pg 67 of the
-                  AP800 manual for specifications)
+                  XAP800 manual for specifications)
         """
         self.send(XAP800_CMD + unitCode + " PEVNT " + pinLocation + EOM)
         return self.readResponse()
@@ -1196,7 +1200,7 @@ class XAPX00(object):
     def enablePhantomPower(self, channel, isEnabled=True, unitCode=0):
         """Enable or disable phantom power for the target channel.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable, false to disable
         """
@@ -1207,7 +1211,7 @@ class XAPX00(object):
     def requestPhantomPower(self, channel, unitCode=0):
         """Request the enable status of phantom power.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         channel - the target channel (1-8, or * for all)
         """
         self.send(XAP800_CMD + unitCode + " PP " + channel + EOM)
@@ -1216,7 +1220,7 @@ class XAPX00(object):
     def setMicEchoCancellerReferenceOutput(self, ecRef, output, unitCode=0):
         """Set the microphone echo canceller reference output
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         ecRef - the desired reference channel
                                   1 = EC Ref 1
                                   2 = EC Ref 2
@@ -1232,7 +1236,7 @@ class XAPX00(object):
     def requestMicEchoCancellerReferenceOutput(self, ecRef, unitCode=0):
         """Request the microphone echo canceller reference output.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         ecRef - the desired reference channel
                                   1 = EC Ref 1
                                   2 = EC Ref 2
@@ -1247,7 +1251,7 @@ class XAPX00(object):
         The value is limited to 0-50 values outside the boundary
         will be anchored to the boundaries.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         timeInMinutes - the timeout value in minutes (1-15, or 0 to disable)
         """
         if timeInMinutes < 0:
@@ -1260,15 +1264,15 @@ class XAPX00(object):
     def requestScreenTimeout(self, unitCode=0):
         """Request the screen timeout in minutes.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " TOUT" + EOM)
         return int(self.readResponse())
 
     def requestVersion(self, unitCode=0):
-        """Request the firmware version of the target AP800.
+        """Request the firmware version of the target XAP800.
 
-        unitCode - the unit code of the target AP800
+        unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " VER" + EOM)
         return self.readResponse()
@@ -1284,5 +1288,5 @@ class XAPX00(object):
                  }
 
     def getHumanErrorDescription(self, errorMsg):
-        """Translates ERROR replies from the AP800 into a human-readable description of the problem."""
+        """Translates ERROR replies from the XAP800 into a human-readable description of the problem."""
         return errorDefs.get(errorMsg, "Unknown Error")

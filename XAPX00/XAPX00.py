@@ -28,7 +28,7 @@ testing = 0
 
 
 _LOGGER = logging.getLogger(__name__)
-if 1:
+if 0:
     import sys
     out_hdlr = logging.StreamHandler(sys.stdout)
     out_hdlr.setFormatter(logging.Formatter('%(asctime)s %(message)s'))

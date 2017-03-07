@@ -1,5 +1,5 @@
 # pylint: disable=invalid-name, exec-used
-"""Setup russound package."""
+"""Setup XAPX00 package."""
 from __future__ import absolute_import
 import sys
 import os

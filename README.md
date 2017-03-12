@@ -21,4 +21,8 @@ xap.getUniqueID() #or whatever
 
 The XAP unit can be completely configured through this module, with a few small exceptions such as setting the unit#.  (I have not added code to handle multiple units gracefully, but it should work by specifying the unit number in each method call.)  However, it may be easiest to do initial configuration with the ClearOne G-Ware application.  There are a lot of nuanced settings that could be missed otherwise.
 
+Since the XAP unit connects via a serial port, you will want to make sure that your usb to serial connection is always in the same place.  The linux udev system offers a way to create a rule so that a device is given a peristent name.  This blog entry offers a good summary:
+http://rolfblijleven.blogspot.nl/2015/02/howto-persistent-device-names-on.html
+
+
 

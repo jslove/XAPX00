@@ -21,7 +21,7 @@ def read(fname):
 setup(name='XAPX00',
       version='0.1.1',
       description='Control an XAP800/XAP400 unit',
-      long_description=open('README.md').read(),
+      long_description=read('README.md'),
       install_requires=['pyserial'],
       license='GNU',
       keywords=['XAP800', 'XAPX00', 'XAP400', 'Genternet', 'ClearOne'],

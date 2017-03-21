@@ -16,12 +16,21 @@ This script may be freely copied and modified so long as it carries a
 reference to the above copyright.  Any modifications to this script
 must use this license and, thus, must itself be freely copyable and
 modifiable under the same terms.
+
+
+Issues:
+Matrix Routing:
+  Wildcard is not accepted for channels, why not?
+  Add ability to turn off all matrix entries
+  Is matrix retained after poweroff? Add ability to clear by default?
+readResponse: still doesn't handle errors cleanly
 """
 
 import serial
 import logging
 import math
 import time
+import warnings
 from functools import wraps
 
 testing = 0
@@ -45,6 +54,7 @@ XAP800_LOCATION_PREFIX = "XAP800"
 XAP800_UNIT_TYPE = 1
 EOM = "\r"
 DEVICE_MAXMICS = "Max Number of Microphones"
+matrixGeo = {'XAP800': 12, 'XAP400': 8}
 
 
 def stereo(func):
@@ -79,7 +89,8 @@ def stereo(func):
                 _LOGGER.debug("Matrix Stereo Command {}".format(func.__name__))
                 largs[2] = largs[2] + 1
             res2 = func(*largs, **kwargs)
-#            res = [res, res2]
+            if res != res2:
+                warnings.warn("Stereo out of sync", RuntimeWarning)
         if res is not None:
             return res
     return stereoFunc
@@ -88,7 +99,7 @@ def stereo(func):
 def db2linear(db, maxref=0):
     """Convert a db level to a linear level of 0-1.
 
-    If maxref us provided, the return value is a proportion of maxref
+    If maxref is provided, the return value is a proportion of maxref
     """
     return (10.0 ** ((float(db) + 0.0000001 - maxref) / 20.0))
 
@@ -122,7 +133,9 @@ class XAPX00(object):
         self.connected    = 0
         self.input_range  = range(1, 13)
         self.output_range = range(1, 13)
-        self.convertDb    = 0  # translate levels between linear(0-1) and db
+        self.convertDb    = 1  # translate levels between linear(0-1) and db
+        self._lastcall    = time.time()
+        self._maxtime     = 60 * 60 * 1  # 1 hour
 
     def connect(self):
         """Open serial port and check connection."""
@@ -133,7 +146,7 @@ class XAPX00(object):
         # Ensure connectivity by requesting the UID of the first unit
         self.serial.flushInput()
         self.serial.write(("#50 SERECHO 1 %s" % EOM).encode())
-        ans = self.serial.readlines(10)
+        self.serial.readlines(10)
         uid = self.getUniqueId(0)
         _LOGGER.info("Connected, got uniqueID %s", str(uid))
         self.connected = 1
@@ -149,6 +162,10 @@ class XAPX00(object):
         Returns:
             number of bytes sent
         """
+        currtime = time.time()
+        if currtime - self._lastcall > self._maxtime:
+            self.reset()
+        self._lastcall = currtime
         _LOGGER.debug("sending %s", data)
         if not testing:
             bytessent = self.serial.write(data.encode())
@@ -179,7 +196,7 @@ class XAPX00(object):
             if resp[0:5].decode() == "ERROR":
                 self.serial.readline()  # clear the trailing "\r\n"
                 self.reset()
-                raise Exception(resp)
+                raise Exception(resp.decode())
             _LOGGER.debug("Response %s" % resp.decode())
             if resp[:-1] != ">\r\n":
                 break
@@ -191,7 +208,7 @@ class XAPX00(object):
 
     def reset(self):
         """Reset connection."""
-        print("Resetting Serial Connection")
+        warnings.warn("Resetting Serial Connection")
         self.disconnect()
         time.sleep(1)
         self.connect()
@@ -361,7 +378,7 @@ class XAPX00(object):
         self.send("%s%s %s %s %s %s %s %s %s" %
                   (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
                    outChannel, outGroup, state, EOM))
-        return int(self.readResponse())
+        return self.readResponse()
 
     @stereo
     def getMatrixRouting(self, inChannel, outChannel, inGroup="I",
@@ -386,6 +403,16 @@ class XAPX00(object):
                   (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
                    outChannel, outGroup, EOM))
         return int(self.readResponse())
+
+    def getMatrixRoutingReport(self, unitCode=0):
+        """Returns a matrix of levels as a list of lists"""
+        routingMatrix = []
+        for x in range(0, matrixGeo[self.XAPType]):
+            routingMatrix.append([])
+            for y in range(0, matrixGeo[self.XAPType]):
+                routingMatrix[x].append(self.getMatrixRouting(
+                    x + 1, y + 1, unitCode=unitCode, stereo=0))
+        return routingMatrix
 
     @stereo
     def setMatrixLevel(self, inChannel, outChannel, level=0,
@@ -430,6 +457,16 @@ class XAPX00(object):
                    outChannel, outGroup, EOM))
         resp = float(self.readResponse(2)[0])
         return db2linear(resp) if self.convertDb else resp
+
+    def getMatrixLevelReport(self, unitCode=0):
+        """Returns a matrix of levels as a list of lists"""
+        levelMatrix = []
+        for x in range(0, matrixGeo[self.XAPType]):
+            levelMatrix.append([])
+            for y in range(0, matrixGeo[self.XAPType]):
+                levelMatrix[x].append(self.getMatrixLevel(
+                    x + 1, y + 1, unitCode=unitCode, stereo=0))
+        return levelMatrix
 
     @stereo
     def setMute(self, channel, isMuted=1, group="I", unitCode=0):

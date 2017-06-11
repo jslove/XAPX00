@@ -175,8 +175,8 @@ class XAPX00(object):
             if res.decode()[:2] != 'OK':
                 self.reset()
                 _LOGGER.debug("send failed, called reset")
-                raise Exception("Sending Command %s failed, response=%s" %
-                                (data, res.decode()))
+#                raise Exception("Sending Command %s failed, response=%s" %
+#                                (data, res.decode()))
             else:
                 return bytessent
         else:
@@ -555,10 +555,12 @@ class XAPX00(object):
         Return:
             isMuted - 1=muted, 0 = unmute
         """
-        self.send("%s%s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "MUTE", channel,
-                   group, EOM))
-        return int(self.readResponse())
+        # self.send("%s%s %s %s %s %s" %
+        #           (XAP800_CMD, unitCode, "MUTE", channel,
+        #            group, EOM))
+#        return int(self.readResponse())
+        resp = self.XAPCommand("MUTE", channel, group, unitCode=unitCode)
+        return int(resp)
 
     @stereo
     def setRamp(self, channel, group, rate, target, unitCode=0):

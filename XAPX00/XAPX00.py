@@ -23,7 +23,7 @@ Matrix Routing:
   Wildcard is not accepted for channels, why not?
   Add ability to turn off all matrix entries
   Is matrix retained after poweroff? Add ability to clear by default?
-readResponse: still doesn't handle errors cleanly
+  readResponse: Doesn't handle errors cleanly
 """
 
 import serial
@@ -145,8 +145,8 @@ class XAPX00(object):
                                     timeout=self.timeout)
         # Ensure connectivity by requesting the UID of the first unit
         self.serial.reset_input_buffer()
-        self.serial.write(("#50 SERECHO 1 %s" % EOM).encode())
-        self.serial.readlines(10)
+        self.serial.write("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode()
+        self.serial.readlines(3) #clear response
         uid = self.getUniqueId(0)
         _LOGGER.info("Connected, got uniqueID %s", str(uid))
         self.connected = 1
@@ -166,8 +166,9 @@ class XAPX00(object):
         if currtime - self._lastcall > self._maxtime:
             self.reset()
         self._lastcall = currtime
-        _LOGGER.debug("sending %s", data)
+        _LOGGER.debug("Sending: %s", data)
         if not testing:
+            self.serial.reset_input_buffer()
             bytessent = self.serial.write(data.encode())
             res = self.serial.readline()
             _LOGGER.debug("Response from send command: {}".format(res))
@@ -226,7 +227,6 @@ class XAPX00(object):
             if resp == '':
                 # nothing coming, have read too many lines
                 return None
-        print(resp)
         respitems = resp.split("#",maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
@@ -234,21 +234,21 @@ class XAPX00(object):
             return respitems[-numElements:]
 
     def XAPCommand(self, command, *args, **kwargs):
-        """Call command and returns value"""
+        """Call command and return value"""
 
         unitCode=kwargs.get('unitCode',0)
 
         rtnCount = kwargs.get('rtnCount',1)
         args = [str(x) for x in args]
         xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
-        print("Sending %s" % xapstr)
+        _LOGGER.debug("Sending %s" % xapstr)
         self.serial.reset_input_buffer()
         self.serial.write(xapstr.encode())
         res = self.readResponse(numElements = rtnCount)
-        print("Response: %s" % res)
+        _LOGGER.debug("Response: %s" % res)
         return res
         
-    def getUniqueId2(self, unitCode=0):
+    def getUniqueId(self, unitCode=0):
         """Requests the unique ID of the target XAP800.
 
         This is a hex value preprogrammed at the factory.
@@ -300,9 +300,11 @@ class XAPX00(object):
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
-        self.send(XAP800_CMD + unitCode + " EC " + channel + " " +
-                  ("1" if isEnabled else "0") + EOM)
-        return int(self.readResponse())
+        if self.XAPType == XAP800Type: ec="AEC"
+        else: ec = "EC"
+        res = self.XAPCommand(ec, channel, "1" if isEnabled else "0", unitCode=unitCode)
+        return int(res)
+
 
     @stereo
     def getEchoCanceller(self, channel, unitCode=0):
@@ -312,8 +314,10 @@ class XAPX00(object):
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
-        self.send(XAP800_CMD + unitCode + " EC " + channel + " " + EOM)
-        return int(self.readResponse())
+        if self.XAPType == XAP800Type: ec="AEC"
+        else: ec = "EC"
+        res = self.XAPCommand(ec, channel, unitCode=unitCode)
+        return int(res)
 
     @stereo
     def getMaxGain(self, channel, group="I", unitCode=0):
@@ -561,7 +565,7 @@ class XAPX00(object):
                    rate, target, EOM))
         return int(self.readResponse())
 
-    def getUniqueId(self, unitCode=0):
+    def getUniqueId_old(self, unitCode=0):
         """Requests the unique ID of the target XAP800.
 
         This is a hex value preprogrammed at the factory.
@@ -716,16 +720,6 @@ class XAPX00(object):
             unitCode - the unit code of the target XAP800
         """
         self.send(XAP800_CMD + unitCode + " PRESET" + EOM)
-        return int(self.readResponse())
-
-    def requestEchoCanceller(self, channel, unitCode=0):
-        """Request the status of the echo canceller.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel
-        """
-        self.send("{}{} {} {} {}".format(XAP800_CMD, unitCode,
-                                         "EC", channel, EOM))
         return int(self.readResponse())
 
     def getEchoReturnLoss(self, channel, unitCode=0):

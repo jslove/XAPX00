@@ -262,11 +262,7 @@ class XAPX00(object):
     def reset(self):
         """Reset connection."""
         warnings.warn("Clearing Serial Connection")
-        self.serial.readline()
-        self.serial.readline()
-
-        time.sleep(1)
-        self.connect()
+        self.serial.reset_input_buffer()
 
     @stereo
     def setDecayRate(self, channel, decayRate, unitCode=0):

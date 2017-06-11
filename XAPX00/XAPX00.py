@@ -144,7 +144,7 @@ class XAPX00(object):
         self.serial = serial.Serial(self.comPort, self.baudRate,
                                     timeout=self.timeout)
         # Ensure connectivity by requesting the UID of the first unit
-        self.serial.flushInput()
+        self.serial.reset_input_buffer()
         self.serial.write(("#50 SERECHO 1 %s" % EOM).encode())
         self.serial.readlines(10)
         uid = self.getUniqueId(0)
@@ -181,7 +181,7 @@ class XAPX00(object):
         else:
             return len(data)
 
-    def readResponse(self, numElements=1):
+    def readResponse_old(self, numElements=1):
         """Get response from unit.
 
         Args:
@@ -206,10 +206,65 @@ class XAPX00(object):
         else:
             return respitems[-numElements:]
 
+    def readResponse(self, numElements=1):
+        """Get response from unit.
+
+        Args:
+        numElements: How many response compnents to return,
+        starts from end of resposne
+
+        Returns:
+            response string from unit
+        """
+        while 1:
+            resp = self.serial.readline().decode()
+            if len(resp) > 5 and resp[0:5] == "ERROR":
+                raise Exception(resp)
+            _LOGGER.debug("Response %s" % resp)
+            if resp.find('#') > -1:
+                break
+            if resp == '':
+                # nothing coming, have read too many lines
+                return None
+        print(resp)
+        respitems = resp.split("#",maxsplit=1)[1].split()
+        if numElements == 1:
+            return respitems[-1]
+        else:
+            return respitems[-numElements:]
+
+    def XAPCommand(self, command, *args, **kwargs):
+        """Call command and returns value"""
+
+        unitCode=kwargs.get('unitCode',0)
+
+        rtnCount = kwargs.get('rtnCount',1)
+        args = [str(x) for x in args]
+        xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
+        print("Sending %s" % xapstr)
+        self.serial.reset_input_buffer()
+        self.serial.write(xapstr.encode())
+        res = self.readResponse(numElements = rtnCount)
+        print("Response: %s" % res)
+        return res
+        
+    def getUniqueId2(self, unitCode=0):
+        """Requests the unique ID of the target XAP800.
+
+        This is a hex value preprogrammed at the factory.
+
+        unitCode - the unit code of the target XAP800
+        """
+        res = self.XAPCommand("UID")
+        return res
+
+    
     def reset(self):
         """Reset connection."""
-        warnings.warn("Resetting Serial Connection")
-        self.disconnect()
+        warnings.warn("Clearing Serial Connection")
+        self.serial.readline()
+        self.serial.readline()
+
         time.sleep(1)
         self.connect()
 
@@ -227,9 +282,9 @@ class XAPX00(object):
                 decayRate = 1
         elif decayRate > 3:
                 decayRate = 3
-        self.send("%s%s %s %s %s %s"
-                  (XAP800_CMD, unitCode, "DECAY", channel, decayRate, EOM))
-        return int(self.readResponse())
+        res = self.XAPCommand("DECAY", channel, decayRate, unitCode=unitCode)
+        return int(res)
+
 
     @stereo
     def getDecayRate(self, channel, unitCode=0):
@@ -238,9 +293,8 @@ class XAPX00(object):
         channel: 1-8
         unitCode - the unit code of the target XAP800
         """
-        self.send("%s%s %s %s %s" %
-                  (XAP800_CMD, unitCode, "DECAY", channel, EOM))
-        return int(self.readResponse())
+        res = self.XAPCommand("DECAY", channel, unitCode=unitCode)
+        return int(res)
 
     @stereo
     def setEchoCanceller(self, channel, isEnabled=True, unitCode=0):

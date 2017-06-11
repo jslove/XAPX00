@@ -145,7 +145,7 @@ class XAPX00(object):
                                     timeout=self.timeout)
         # Ensure connectivity by requesting the UID of the first unit
         self.serial.reset_input_buffer()
-        self.serial.write("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode()
+        self.serial.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
         self.serial.readlines(3) #clear response
         uid = self.getUniqueId(0)
         _LOGGER.info("Connected, got uniqueID %s", str(uid))
@@ -322,19 +322,20 @@ class XAPX00(object):
     @stereo
     def getMaxGain(self, channel, group="I", unitCode=0):
         """Get max gain setting for a channel."""
-        self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "MAX", channel,
-                  group, EOM))
-
-        resp = self.readResponse()
+        # self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "MAX", channel,
+        #           group, EOM))
+        # resp = self.readResponse()
+        resp = self.XAPCommand("MAX", channel, group, unitCode=unitCode)
         return float(resp)
 
     @stereo
     def setMaxGain(self, channel, gain, group="I", unitCode=0):
         """Set max gain setting for a channel."""
-        self.send("%s%s %s %s %s %0.3f %s" %
-                  (XAP800_CMD, unitCode, "MAX", channel,
-                   group, gain, EOM))
-        resp = self.readResponse()
+        # self.send("%s%s %s %s %s %0.3f %s" %
+        #           (XAP800_CMD, unitCode, "MAX", channel,
+        #            group, gain, EOM))
+        # resp = self.readResponse()
+        resp = self.XAPCommand("MAX", channel, group, gain, unitCode=unitCode)
         return resp
 
     @stereo
@@ -345,9 +346,11 @@ class XAPX00(object):
         """
         maxdb = self.getMaxGain(channel, group=group, unitCode=unitCode,
                                 stereo=0)
-        self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "GAIN", channel,
-                                        group, EOM))
-        resp = db2linear(self.readResponse(2)[0], maxdb)
+        # self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "GAIN", channel,
+        #                                 group, EOM))
+        # resp = db2linear(self.readResponse(2)[0], maxdb)
+        resp = self.XAPCommand("GAIN", channel, group, unitCode=unitCode, rtnCount=2)
+        resp = db2linear(resp[0], maxdb)
         return resp
 
     @stereo
@@ -358,10 +361,11 @@ class XAPX00(object):
         """
         maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
         gain = linear2db(gain, maxdb)  # if self.convertDb else gain
-        self.send("%s%s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "GAIN", channel, group,
-                   gain, "A" if isAbsolute == 1 else "R", EOM))
-        resp = self.readResponse(2)[0]
+        # self.send("%s%s %s %s %s %s %s %s" %
+        #           (XAP800_CMD, unitCode, "GAIN", channel, group,
+        #            gain, "A" if isAbsolute == 1 else "R", EOM))
+        # resp = self.readResponse(2)[0]
+        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R") 
         return db2linear(resp, maxdb)  # if self.convertDb else resp
 
     @stereo
@@ -429,10 +433,13 @@ class XAPX00(object):
         state - 0=off, 1=on (line inputs only), 2=toggle (line only),
                3=Non-Gated (mic only), 4=Gated (mic only), Null=currrent mode
         """
-        self.send("%s%s %s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
-                   outChannel, outGroup, state, EOM))
-        return self.readResponse()
+        res = XAPCommand("MTRX",inChannel, inGroup,
+                   outChannel, outGroup, state,unitCode=unitCode)
+        # self.send("%s%s %s %s %s %s %s %s %s" %
+        #           (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
+        #            outChannel, outGroup, state, EOM))
+        # res =  self.readResponse()
+        return res
 
     @stereo
     def getMatrixRouting(self, inChannel, outChannel, inGroup="I",
@@ -650,19 +657,22 @@ class XAPX00(object):
                   (XAP800_CMD, unitCode, "AMBLVL", channel, EOM))
         return float(self.readResponse())
 
-    def baudRate(self, baudRate, unitCode=0):
+    def getSetBaudRate(self, baudRate, unitCode=0):
         """Set the baud rate for the RS232 port on the specified XAP800.
 
         unitCode - the unit code of the target XAP800
         baudRate - the baud rate (9600, 19200, or 38400)
         """
-        baudRateCode = {9600: 1, 19200: 2, 38400: 3, " ": " "}
-        self.send(XAP800_CMD + unitCode + " BAUD " +
-                  baudRateCode[baudRate, 1] + EOM)
-        if baudRate == " ":
-            res = self.readResponse()
+        if self.XAPType == XAP400Type:
+            baudRateCode = {9600: 1, 19200: 2, 38400: 3, " ": " ", "":" "}
+            rateBaudCode = {v: k for k, v in baudRateCode.items()}
+            baud = baudRateCode.get(baudRate,3)
+        else:
+            baud = baudRate
+        res = self.XAPCommand("BAUD", baud, unitCode=unitCode)
+        if self.XAPType == XAP400Type:
+            res = rateBaudCode.get(res, 0)
         return res
-# this response is wrong for now, need to translate response from code to rate
 
     def setChairmanOverride(self, channel, isEnabled=0, unitCode=0):
         """Modifies the state of the chairman override for the specified microphone(s).

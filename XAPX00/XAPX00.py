@@ -170,15 +170,15 @@ class XAPX00(object):
         if not testing:
             self.serial.reset_input_buffer()
             bytessent = self.serial.write(data.encode())
-            res = self.serial.readline()
-            _LOGGER.debug("Response from send command: {}".format(res))
-            if res.decode()[:2] != 'OK':
-                self.reset()
-                _LOGGER.debug("send failed, called reset")
-#                raise Exception("Sending Command %s failed, response=%s" %
-#                                (data, res.decode()))
-            else:
-                return bytessent
+            # res = self.serial.readline()
+            # _LOGGER.debug("Response from send command: {}".format(res))
+            # if res.decode()[:2] != 'OK':
+            #     self.reset()
+            #     _LOGGER.debug("send failed, called reset")
+            #    raise Exception("Sending Command %s failed, response=%s" %
+            #                    (data, res.decode()))
+            #else:
+            return bytessent
         else:
             return len(data)
 
@@ -460,10 +460,13 @@ class XAPX00(object):
             state: 0=off, 1=on (line inputs only), 2=toggle (line only),
                3=Non-Gated (mic only), 4=Gated (mic only), Null=currrent mode
         """
-        self.send("%s%s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
-                   outChannel, outGroup, EOM))
-        return int(self.readResponse())
+        # self.send("%s%s %s %s %s %s %s %s" %
+        #           (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
+        #            outChannel, outGroup, EOM))
+        # return int(self.readResponse())
+        resp = XAPCommand("MTRX",inChannel, inGroup,
+                   outChannel, outGroup, unitCode=unitCode)
+        return resp
 
     def getMatrixRoutingReport(self, unitCode=0):
         """Returns a matrix of levels as a list of lists"""

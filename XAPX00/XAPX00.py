@@ -433,7 +433,7 @@ class XAPX00(object):
         state - 0=off, 1=on (line inputs only), 2=toggle (line only),
                3=Non-Gated (mic only), 4=Gated (mic only), Null=currrent mode
         """
-        res = XAPCommand("MTRX",inChannel, inGroup,
+        res = self.XAPCommand("MTRX",inChannel, inGroup,
                    outChannel, outGroup, state,unitCode=unitCode)
         # self.send("%s%s %s %s %s %s %s %s %s" %
         #           (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
@@ -464,7 +464,7 @@ class XAPX00(object):
         #           (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
         #            outChannel, outGroup, EOM))
         # return int(self.readResponse())
-        resp = XAPCommand("MTRX",inChannel, inGroup,
+        resp = self.XAPCommand("MTRX",inChannel, inGroup,
                    outChannel, outGroup, unitCode=unitCode)
         return resp
 

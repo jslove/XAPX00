@@ -26,6 +26,8 @@ Matrix Routing:
   readResponse: Doesn't handle errors cleanly
 """
 
+__version__ = '0.2'
+
 import serial
 import logging
 import math

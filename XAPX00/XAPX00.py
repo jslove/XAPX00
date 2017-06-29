@@ -31,6 +31,7 @@ import logging
 import math
 import time
 import warnings
+import time
 from functools import wraps
 
 testing = 0
@@ -84,10 +85,16 @@ def stereo(func):
         if args[0].stereo and _stereo:  # self.stereo
             _LOGGER.debug("Stereo Command {}:{}".format(func.__name__, args))
             largs = list(args)
-            largs[1] = largs[1] + 1
+            if type(largs[1]) == str:
+                largs[1] = chr(ord(largs[1]))
+            else:
+                largs[1] = largs[1] + 1
             if func.__name__[3:9] == "Matrix":  # do stereo on input and output
                 _LOGGER.debug("Matrix Stereo Command {}".format(func.__name__))
-                largs[2] = largs[2] + 1
+                if type(largs[1]) == str:
+                    largs[2] = chr(ord(largs[2]))
+                else:
+                    largs[2] = largs[2] + 1
             res2 = func(*largs, **kwargs)
             if res != res2:
                 warnings.warn("Stereo out of sync", RuntimeWarning)
@@ -136,6 +143,8 @@ class XAPX00(object):
         self.convertDb    = 1  # translate levels between linear(0-1) and db
         self._lastcall    = time.time()
         self._maxtime     = 60 * 60 * 1  # 1 hour
+        self._maxrespdelay = 5
+        self._sleeptime = 0.5
 
     def connect(self):
         """Open serial port and check connection."""
@@ -162,6 +171,14 @@ class XAPX00(object):
         Returns:
             number of bytes sent
         """
+        while 1:
+            if self._waiting_response==1:
+                if time.time() - starttime > self._maxrespdelay:
+                    break
+                time.sleep(self._sleeptime)
+            else:
+                break
+
         currtime = time.time()
         if currtime - self._lastcall > self._maxtime:
             self.reset()
@@ -179,7 +196,9 @@ class XAPX00(object):
             #                    (data, res.decode()))
             #else:
             return bytessent
+
         else:
+            self._waiting_response = 1
             return len(data)
 
     def readResponse_old(self, numElements=1):
@@ -221,11 +240,13 @@ class XAPX00(object):
             resp = self.serial.readline().decode()
             if len(resp) > 5 and resp[0:5] == "ERROR":
                 raise Exception(resp)
+                self._waiting_response = 0
             _LOGGER.debug("Response %s" % resp)
             if resp.find('#') > -1:
                 break
             if resp == '':
                 # nothing coming, have read too many lines
+                self._waiting_response = 0
                 return None
         respitems = resp.split("#",maxsplit=1)[1].split()
         if numElements == 1:
@@ -244,6 +265,7 @@ class XAPX00(object):
         _LOGGER.debug("Sending %s" % xapstr)
         self.serial.reset_input_buffer()
         self.serial.write(xapstr.encode())
+        self._waiting_response = 1
         res = self.readResponse(numElements = rtnCount)
         _LOGGER.debug("Response: %s" % res)
         return res

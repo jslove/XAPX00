@@ -73,7 +73,7 @@ def stereo(func):
         # trying to find a way to have a method
         # calling another method not do the stereo repeat
         # so if calling an internal func from a stereo func,
-        # add the _stereo kw arg to call
+        # add the stereo kw arg to call
         # it will be removed before calling underlying func
 
         if 'stereo' in kwargs.keys():
@@ -91,12 +91,13 @@ def stereo(func):
                 largs[1] = largs[1] + 1
             if func.__name__[3:9] == "Matrix":  # do stereo on input and output
                 _LOGGER.debug("Matrix Stereo Command {}".format(func.__name__))
-                if type(largs[1]) == str:
+                if type(largs[2]) == str:
                     largs[2] = chr(ord(largs[2]))
                 else:
                     largs[2] = largs[2] + 1
             res2 = func(*largs, **kwargs)
             if res != res2:
+                _LOGGER.debug("Stereo out of sync {} : {}".format(res, res2))
                 warnings.warn("Stereo out of sync", RuntimeWarning)
         if res is not None:
             return res
@@ -144,7 +145,8 @@ class XAPX00(object):
         self._lastcall    = time.time()
         self._maxtime     = 60 * 60 * 1  # 1 hour
         self._maxrespdelay = 5
-        self._sleeptime = 0.5
+        self._sleeptime = 0.25
+        self._waiting_response = 0
 
     def connect(self):
         """Open serial port and check connection."""
@@ -166,15 +168,17 @@ class XAPX00(object):
         self.connected = 0
 
     def send(self, data):
-        """Send the specified data string to the AP800
+        """Send the specified data string to the XAP800
 
         Returns:
             number of bytes sent
         """
+        starttime = time.time()
         while 1:
             if self._waiting_response==1:
                 if time.time() - starttime > self._maxrespdelay:
                     break
+                _LOGGER.debug("Send going to sleep\n")
                 time.sleep(self._sleeptime)
             else:
                 break
@@ -201,36 +205,32 @@ class XAPX00(object):
             self._waiting_response = 1
             return len(data)
 
-    def readResponse_old(self, numElements=1):
-        """Get response from unit.
+    def XAPCommand(self, command, *args, **kwargs):
+        """Call command and return value"""
 
-        Args:
-        numElements: How many response compnents to return,
-        starts from end of resposne
+        unitCode=kwargs.get('unitCode',0)
 
-        Returns:
-            response string from unit
-        """
+        rtnCount = kwargs.get('rtnCount',1)
+        args = [str(x) for x in args]
+        xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
+        _LOGGER.debug("Sending %s" % xapstr)
         while 1:
-            resp = self.serial.readline()
-            if resp[0:5].decode() == "ERROR":
-                self.serial.readline()  # clear the trailing "\r\n"
-                self.reset()
-                raise Exception(resp.decode())
-            _LOGGER.debug("Response %s" % resp.decode())
-            if resp[:-1] != ">\r\n":
-                break
-        respitems = resp.decode().split()
-        if numElements == 1:
-            return respitems[-1]
-        else:
-            return respitems[-numElements:]
+            if self._waiting_response == 1:
+                time.sleep(self._sleeptime)
+            else:
+                break           
+        self.serial.reset_input_buffer()
+        self.serial.write(xapstr.encode())
+        self._waiting_response = 1
+        res = self.readResponse(numElements = rtnCount)
+        _LOGGER.debug("Response: %s" % res)
+        return res
 
     def readResponse(self, numElements=1):
         """Get response from unit.
 
         Args:
-        numElements: How many response compnents to return,
+        numElements: How many response components to return,
         starts from end of resposne
 
         Returns:
@@ -243,32 +243,16 @@ class XAPX00(object):
                 self._waiting_response = 0
             _LOGGER.debug("Response %s" % resp)
             if resp.find('#') > -1:
+                self._waiting_response = 0
                 break
             if resp == '':
                 # nothing coming, have read too many lines
-                self._waiting_response = 0
                 return None
         respitems = resp.split("#",maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
         else:
             return respitems[-numElements:]
-
-    def XAPCommand(self, command, *args, **kwargs):
-        """Call command and return value"""
-
-        unitCode=kwargs.get('unitCode',0)
-
-        rtnCount = kwargs.get('rtnCount',1)
-        args = [str(x) for x in args]
-        xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
-        _LOGGER.debug("Sending %s" % xapstr)
-        self.serial.reset_input_buffer()
-        self.serial.write(xapstr.encode())
-        self._waiting_response = 1
-        res = self.readResponse(numElements = rtnCount)
-        _LOGGER.debug("Response: %s" % res)
-        return res
         
     def getUniqueId(self, unitCode=0):
         """Requests the unique ID of the target XAP800.
@@ -344,19 +328,12 @@ class XAPX00(object):
     @stereo
     def getMaxGain(self, channel, group="I", unitCode=0):
         """Get max gain setting for a channel."""
-        # self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "MAX", channel,
-        #           group, EOM))
-        # resp = self.readResponse()
         resp = self.XAPCommand("MAX", channel, group, unitCode=unitCode)
         return float(resp)
 
     @stereo
     def setMaxGain(self, channel, gain, group="I", unitCode=0):
         """Set max gain setting for a channel."""
-        # self.send("%s%s %s %s %s %0.3f %s" %
-        #           (XAP800_CMD, unitCode, "MAX", channel,
-        #            group, gain, EOM))
-        # resp = self.readResponse()
         resp = self.XAPCommand("MAX", channel, group, gain, unitCode=unitCode)
         return resp
 
@@ -383,20 +360,14 @@ class XAPX00(object):
         """
         maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
         gain = linear2db(gain, maxdb)  # if self.convertDb else gain
-        # self.send("%s%s %s %s %s %s %s %s" %
-        #           (XAP800_CMD, unitCode, "GAIN", channel, group,
-        #            gain, "A" if isAbsolute == 1 else "R", EOM))
-        # resp = self.readResponse(2)[0]
-        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R") 
+        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",rtnCount=2)[0] 
         return db2linear(resp, maxdb)  # if self.convertDb else resp
 
     @stereo
     def getGain(self, channel, group="I", unitCode=0):
         """Get gain level for a channel/group, 0 - 1"""
-        self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "GAIN", channel,
-                                        group, EOM))
+        resp = self.XAPCommand("GAIN", channel, group, rtnCount=2)[0] 
 
-        resp = self.readResponse(2)[0]
         return db2linear(resp) if self.convertDb else resp
 
     @stereo
@@ -412,10 +383,7 @@ class XAPX00(object):
                      false if it's a relative movement.
         """
         gain = linear2db(gain) if self.convertDb else gain
-        self.send("%s%s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "GAIN", channel, group,
-                   gain, "A" if isAbsolute == 1 else "R", EOM))
-        resp = self.readResponse(2)[0]
+        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R", rtnCount=2)[0]
         return db2linear(resp) if self.convertDb else resp
 
     @stereo
@@ -427,10 +395,14 @@ class XAPX00(object):
         channel - the target channel (1-8, A-D)
         unitCode - the unit code of the target XAP800
         group - the target channel type
+        stage - See documentation
         """
         self.send(XAP800_CMD + str(unitCode) + " LVL " + str(channel) + " " +
                   group + " " + stage + " " + EOM)
         return float(self.readResponse())
+        resp = self.XAPCommand("LVL", channel, group, stage)
+        return float(resp)
+    
 
     def getLabel(self, channel, group, unitCode=0):
         """Retrieve the text label assigned to an inpout or ouput"""
@@ -456,11 +428,7 @@ class XAPX00(object):
                3=Non-Gated (mic only), 4=Gated (mic only), Null=currrent mode
         """
         res = self.XAPCommand("MTRX",inChannel, inGroup,
-                   outChannel, outGroup, state,unitCode=unitCode)
-        # self.send("%s%s %s %s %s %s %s %s %s" %
-        #           (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
-        #            outChannel, outGroup, state, EOM))
-        # res =  self.readResponse()
+                   outChannel, outGroup, state, unitCode=unitCode)
         return res
 
     @stereo
@@ -482,10 +450,6 @@ class XAPX00(object):
             state: 0=off, 1=on (line inputs only), 2=toggle (line only),
                3=Non-Gated (mic only), 4=Gated (mic only), Null=currrent mode
         """
-        # self.send("%s%s %s %s %s %s %s %s" %
-        #           (XAP800_CMD, unitCode, "MTRX", inChannel, inGroup,
-        #            outChannel, outGroup, EOM))
-        # return int(self.readResponse())
         resp = self.XAPCommand("MTRX",inChannel, inGroup,
                    outChannel, outGroup, unitCode=unitCode)
         return resp
@@ -517,11 +481,10 @@ class XAPX00(object):
         level:    0 - 1
         """
         level = linear2db(level) if self.convertDb else level
-        self.send("%s%s %s %s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "MTRXLVL", inChannel, inGroup,
+        resp = self.XAPCommand("MTRXLVL", inChannel, inGroup,
                    outChannel, outGroup, level, "A" if isAbsolute == 1
-                   else "R", EOM))
-        resp = float(self.readResponse(2)[0])
+                               else "R", unitCode=unitCode, rtnCount=2)[0]
+
         return db2linear(resp) if self.convertDb else resp
 
     @stereo
@@ -538,10 +501,9 @@ class XAPX00(object):
         inGroup - input group (I-inlts, M=mics, L=line, ...
         outGroup - otput group (O=all Outputs 1-12, P=processing A-H, ...
         """
-        self.send("%s%s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "MTRXLVL", inChannel, inGroup,
-                   outChannel, outGroup, EOM))
-        resp = float(self.readResponse(2)[0])
+        resp = self.XAPCommand("MTRXLVL", inChannel, inGroup,
+                   outChannel, outGroup, unitCode=unitCode, rtnCount=2)[0]
+
         return db2linear(resp) if self.convertDb else resp
 
     def getMatrixLevelReport(self, unitCode=0):
@@ -564,10 +526,9 @@ class XAPX00(object):
         group -   I=Input, O=Output, M=Mike, etc
         isMuted - 1 to mute, 0 to unmute, 2 to toggle
         """
-        self.send("%s%s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "MUTE", channel,
-                   group, str(isMuted), EOM))
-        return int(self.readResponse())
+        resp = self.XAPCommand("MUTE", channel, group, str(isMuted),
+                   unitCode=unitCode)
+        return int(resp)
 
     @stereo
     def getMute(self, channel, group="I", unitCode=0):
@@ -580,10 +541,6 @@ class XAPX00(object):
         Return:
             isMuted - 1=muted, 0 = unmute
         """
-        # self.send("%s%s %s %s %s %s" %
-        #           (XAP800_CMD, unitCode, "MUTE", channel,
-        #            group, EOM))
-#        return int(self.readResponse())
         resp = self.XAPCommand("MUTE", channel, group, unitCode=unitCode)
         return int(resp)
 
@@ -594,20 +551,12 @@ class XAPX00(object):
         Ramp gain at the specified rate in db/sec to the target
         or to max / min if target is blank (space).
         """
-        self.send("%s%s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "Ramp", channel, group,
-                   rate, target, EOM))
-        return int(self.readResponse())
-
-    def getUniqueId_old(self, unitCode=0):
-        """Requests the unique ID of the target XAP800.
-
-        This is a hex value preprogrammed at the factory.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + str(unitCode) + " UID" + EOM)
-        return self.readResponse()
+        # self.send("%s%s %s %s %s %s %s %s" %
+        #           (XAP800_CMD, unitCode, "Ramp", channel, group,
+        #            rate, target, EOM))
+        # return int(self.readResponse())
+        resp = self.XAPCommand("Ramp", channel, group, rate, target, unitCode=unitCode)
+        return int(resp)
 
 #  below here not tested very much ###
     def setAdaptiveAmbient(self, channel, group="M", isEnabled=1, unitCode=0):

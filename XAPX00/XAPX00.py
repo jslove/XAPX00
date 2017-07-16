@@ -23,7 +23,6 @@ Matrix Routing:
   Wildcard is not accepted for channels, why not?
   Add ability to turn off all matrix entries
   Is matrix retained after poweroff? Add ability to clear by default?
-  readResponse: Doesn't handle errors cleanly
 """
 
 __version__ = '0.2'
@@ -34,6 +33,8 @@ import math
 import time
 import warnings
 import time
+import string
+
 from functools import wraps
 
 testing = 0
@@ -58,7 +59,7 @@ XAP800_UNIT_TYPE = 1
 EOM = "\r"
 DEVICE_MAXMICS = "Max Number of Microphones"
 matrixGeo = {'XAP800': 12, 'XAP400': 8}
-
+nogainGroups = ('E')
 
 def stereo(func):
     """
@@ -88,13 +89,13 @@ def stereo(func):
             _LOGGER.debug("Stereo Command {}:{}".format(func.__name__, args))
             largs = list(args)
             if type(largs[1]) == str:
-                largs[1] = chr(ord(largs[1]))
+                largs[1] = chr(ord(largs[1])+1)
             else:
                 largs[1] = largs[1] + 1
             if func.__name__[3:9] == "Matrix":  # do stereo on input and output
                 _LOGGER.debug("Matrix Stereo Command {}".format(func.__name__))
                 if type(largs[2]) == str:
-                    largs[2] = chr(ord(largs[2]))
+                    largs[2] = chr(ord(largs[2])+1)
                 else:
                     largs[2] = largs[2] + 1
             res2 = func(*largs, **kwargs)
@@ -149,6 +150,8 @@ class XAPX00(object):
         self._maxrespdelay = 5
         self._sleeptime = 0.25
         self._waiting_response = 0
+        self.ExpansionChannels = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
+        self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
 
     def connect(self):
         """Open serial port and check connection."""
@@ -193,16 +196,7 @@ class XAPX00(object):
         if not testing:
             self.serial.reset_input_buffer()
             bytessent = self.serial.write(data.encode())
-            # res = self.serial.readline()
-            # _LOGGER.debug("Response from send command: {}".format(res))
-            # if res.decode()[:2] != 'OK':
-            #     self.reset()
-            #     _LOGGER.debug("send failed, called reset")
-            #    raise Exception("Sending Command %s failed, response=%s" %
-            #                    (data, res.decode()))
-            #else:
             return bytessent
-
         else:
             self._waiting_response = 1
             return len(data)
@@ -225,7 +219,6 @@ class XAPX00(object):
         self.serial.write(xapstr.encode())
         self._waiting_response = 1
         res = self.readResponse(numElements = rtnCount)
-        _LOGGER.debug("Response: %s" % res)
         return res
 
     def readResponse(self, numElements=1):
@@ -241,8 +234,8 @@ class XAPX00(object):
         while 1:
             resp = self.serial.readline().decode()
             if len(resp) > 5 and resp[0:5] == "ERROR":
-                raise Exception(resp)
                 self._waiting_response = 0
+                raise Exception(resp)
             _LOGGER.debug("Response %s" % resp)
             if resp.find('#') > -1:
                 self._waiting_response = 0
@@ -263,7 +256,7 @@ class XAPX00(object):
 
         unitCode - the unit code of the target XAP800
         """
-        res = self.XAPCommand("UID")
+        res = self.XAPCommand("UID", unitCode=unitCode)
         return res
 
     
@@ -330,12 +323,16 @@ class XAPX00(object):
     @stereo
     def getMaxGain(self, channel, group="I", unitCode=0):
         """Get max gain setting for a channel."""
+        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+            raise Exception('Gain not available on Expansion Bus')
         resp = self.XAPCommand("MAX", channel, group, unitCode=unitCode)
         return float(resp)
 
     @stereo
     def setMaxGain(self, channel, gain, group="I", unitCode=0):
         """Set max gain setting for a channel."""
+        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+            raise Exception('Gain not available on Expansion Bus')
         resp = self.XAPCommand("MAX", channel, group, gain, unitCode=unitCode)
         return resp
 
@@ -345,6 +342,8 @@ class XAPX00(object):
 
         Returned as linear scale of 0-1, with 1=maxgain
         """
+        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+            raise Exception('Gain not available on Expansion Bus')
         maxdb = self.getMaxGain(channel, group=group, unitCode=unitCode,
                                 stereo=0)
         # self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "GAIN", channel,
@@ -360,16 +359,22 @@ class XAPX00(object):
 
         Gain input is on a linear scale of 0-1, with 1=maxgain
         """
+        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+            raise Exception('Gain not available on Expansion Bus')
         maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
         gain = linear2db(gain, maxdb)  # if self.convertDb else gain
-        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",rtnCount=2)[0] 
+        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
+                               unitCode=unitCode, rtnCount=2)[0] 
         return db2linear(resp, maxdb)  # if self.convertDb else resp
 
     @stereo
     def getGain(self, channel, group="I", unitCode=0):
         """Get gain level for a channel/group, 0 - 1"""
-        resp = self.XAPCommand("GAIN", channel, group, rtnCount=2)[0] 
-
+        if group == 'E': #E is expansion, GAIN is set on source unit, so return max
+            raise Exception('Gain not available on Expansion Bus')
+        else:
+            resp = self.XAPCommand("GAIN", channel, group, unitCode = unitCode,
+                                   rtnCount=2)[0] 
         return db2linear(resp) if self.convertDb else resp
 
     @stereo
@@ -384,8 +389,13 @@ class XAPX00(object):
         isAbsolute - true if the level specified is an absolute setting,
                      false if it's a relative movement.
         """
+        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+            raise Exception('Gain not available on Expansion Bus')
         gain = linear2db(gain) if self.convertDb else gain
-        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R", rtnCount=2)[0]
+        if group in ('E'):  # can't set GAIN on expansion bus
+            resp = 20.0 # or raise error?????
+        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
+                               unitCode=unitCode, rtnCount=2)[0]
         return db2linear(resp) if self.convertDb else resp
 
     @stereo
@@ -402,7 +412,7 @@ class XAPX00(object):
         self.send(XAP800_CMD + str(unitCode) + " LVL " + str(channel) + " " +
                   group + " " + stage + " " + EOM)
         return float(self.readResponse())
-        resp = self.XAPCommand("LVL", channel, group, stage)
+        resp = self.XAPCommand("LVL", channel, group, stage, unitCode=unitCode)
         return float(resp)
     
 
@@ -553,10 +563,6 @@ class XAPX00(object):
         Ramp gain at the specified rate in db/sec to the target
         or to max / min if target is blank (space).
         """
-        # self.send("%s%s %s %s %s %s %s %s" %
-        #           (XAP800_CMD, unitCode, "Ramp", channel, group,
-        #            rate, target, EOM))
-        # return int(self.readResponse())
         resp = self.XAPCommand("Ramp", channel, group, rate, target, unitCode=unitCode)
         return int(resp)
 
@@ -570,10 +576,8 @@ class XAPX00(object):
             group:  "M"ike, "O"utput, "I"nput, etc
             isEnabled - 1 to enable, 0 to disable
         """
-        self.send("%s %s %s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "AAMB", channel, group,
-                   ("1" if isEnabled else "0"), EOM))
-        self.readResponse()
+        resp = self.XAPCommand("AAMB", channel, group, ("1" if isEnabled else "0"), unitCode=unitCode)
+        return int(resp)
 
     def getAdaptiveAmbient(self, channel, group="M", unitCode=0):
         """Requests the state of the adaptive ambient for the specified mic(s).
@@ -581,9 +585,8 @@ class XAPX00(object):
         unitCode - the unit code of the target XAP800
         channel - 1-8 for specific mic channel, or * for all mics
         """
-        self.send("%s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "AAMB", channel, group, EOM))
-        return int(self.readResponse())
+        resp = self.XAPCommand("AAMB", channel, group, unitCode=unitCode)
+        return int(resp)
 
     def setAutoGainControl(self, channel, isEnabled, group="I", unitCode=0):
         """Modifies the state of the automatic gain control (AGC) for the mic(s).
@@ -592,9 +595,8 @@ class XAPX00(object):
         channel - 1-8 for specific mic channel, or * for all mics
         isEnabled - true to enable, false to disable
         """
-        self.send(XAP800_CMD + unitCode + " AGC " + channel + " " +
-                  group + " " + ("1" if isEnabled else "0") + EOM)
-        return self.readResponse()
+        resp = self.XAPCommand("AGC", channel, group, ("1" if isEnabled else "0"), unitCode=unitCode)
+        return bool(resp)
 
     def getAutoGainControl(self, channel, group="I", unitCode=0):
         """Requests the state of the automatic gain control (AGC) for the mic.
@@ -602,10 +604,9 @@ class XAPX00(object):
         unitCode - the unit code of the target XAP800
         channel - 1-8 for specific mic channel, or * for all mics
         """
-        self.send(XAP800_CMD + unitCode + " AGC " + channel + " " +
-                  group + " " + EOM)
-        return int(self.readResponse())
-
+        resp = self.XAPCommand("AGC", channel, group, unitCode=unitCode)
+        return bool(resp)
+    
     def setAmbientLevel(self, channel, levelInDb, unitCode=0):
         """Sets the fixed ambient level of the specified XAP800.
 

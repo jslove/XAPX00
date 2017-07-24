@@ -25,7 +25,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2'
+__version__ = '0.2.3'
 
 import serial
 import logging
@@ -132,6 +132,7 @@ class XAPX00(object):
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
                  stereo=0, XAPType=XAP800Type):
         """init: no parameters required."""
+        _LOGGER.debug("XAPX00 version: {}".format(__version__))
         self.comPort      = comPort
         self.baudRate     = baudRate
         self.byteLength   = 8
@@ -362,8 +363,9 @@ class XAPX00(object):
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
         maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
-        gain = linear2db(gain, maxdb)  # if self.convertDb else gain
-        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
+        dbgain = linear2db(gain, maxdb)  # if self.convertDb else gain
+        _LOGGER.debug("setPropGain: linear:{}, max:{}, db:{}".format( gain, maxdb, dbgain)) 
+        resp = self.XAPCommand("GAIN", channel, group, dbgain, "A" if isAbsolute == 1 else "R",
                                unitCode=unitCode, rtnCount=2)[0] 
         return db2linear(resp, maxdb)  # if self.convertDb else resp
 

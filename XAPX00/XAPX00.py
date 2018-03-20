@@ -420,7 +420,7 @@ class XAPX00(object):
 
     def getLabel(self, channel, group, unitCode=0):
         """Retrieve the text label assigned to an inpout or ouput"""
-        self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "LEVEL",
+        self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "LABEL",
                                         channel, group, EOM))
         return self.readResponse()
 

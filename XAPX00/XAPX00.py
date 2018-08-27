@@ -25,7 +25,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2.3'
+__version__ = '0.2.4'
 
 import serial
 import logging
@@ -34,7 +34,7 @@ import time
 import warnings
 import time
 import string
-
+from threading import Lock
 from functools import wraps
 
 testing = 0
@@ -107,13 +107,16 @@ def stereo(func):
     return stereoFunc
 
 
+def is_number(s):
+    """ Returns True is string is a number. """
+    return s.replace('.','',1).replace('-','',1).isdigit()
+
 def db2linear(db, maxref=0):
     """Convert a db level to a linear level of 0-1.
 
     If maxref is provided, the return value is a proportion of maxref
     """
     return (10.0 ** ((float(db) + 0.0000001 - maxref) / 20.0))
-
 
 def linear2db(gain, maxref=0):
     """Convert a linear volume level of 0-1 to db.
@@ -126,13 +129,21 @@ def linear2db(gain, maxref=0):
     return min(max(maxref + dbdiff, -99), 99)
 
 
+class XAPCommError(Exception):
+    """ Communications Error """
+    pass
+
+class XAPRespError(Exception):
+    """ XAP Responded With Error """
+    pass
+
 class XAPX00(object):
     """XAPX000 Module."""
 
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
                  stereo=0, XAPType=XAP800Type):
         """init: no parameters required."""
-        _LOGGER.debug("XAPX00 version: {}".format(__version__))
+        _LOGGER.info("XAPX00 version: {}".format(__version__))
         self.comPort      = comPort
         self.baudRate     = baudRate
         self.byteLength   = 8
@@ -149,29 +160,35 @@ class XAPX00(object):
         self._lastcall    = time.time()
         self._maxtime     = 60 * 60 * 1  # 1 hour
         self._maxrespdelay = 5
-        self._sleeptime = 0.25
+        self._sleeptime   = 0.25
         self._waiting_response = 0
         self.ExpansionChannels = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
         self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
+        self._commlock = Lock()
+        self.connect(check=True)
 
-    def connect(self):
+    def connect(self, check=False):
         """Open serial port and check connection."""
-        _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
-                     " baud...")
+        if self.connected:
+            return
         self.serial = serial.Serial(self.comPort, self.baudRate,
                                     timeout=self.timeout)
-        # Ensure connectivity by requesting the UID of the first unit
-        self.serial.reset_input_buffer()
-        self.serial.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
-        self.serial.readlines(3) #clear response
-        uid = self.getUniqueId(0)
-        _LOGGER.info("Connected, got uniqueID %s", str(uid))
+        if check:
+            _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
+                         " baud...")
+            # Ensure connectivity by requesting the UID of the first unit
+            self.serial.reset_input_buffer()
+            self.serial.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
+            self.serial.readlines(3) #clear response
+            uid = self.getUniqueId(0)
+            _LOGGER.info("Connected, got uniqueID %s", str(uid))
         self.connected = 1
 
     def disconnect(self):
         """Disconnect from serial port"""
-        self.serial.close()
-        self.connected = 0
+        if self.connected:
+            self.serial.close()
+            self.connected = 0
 
     def send(self, data):
         """Send the specified data string to the XAP800
@@ -179,55 +196,21 @@ class XAPX00(object):
         Returns:
             number of bytes sent
         """
-        starttime = time.time()
-        while 1:
-            if self._waiting_response==1:
-                if time.time() - starttime > self._maxrespdelay:
-                    break
-                _LOGGER.debug("Send going to sleep\n")
-                time.sleep(self._sleeptime)
-            else:
-                break
-
-        currtime = time.time()
-        if currtime - self._lastcall > self._maxtime:
-            self.reset()
-        self._lastcall = currtime
+        self._commlock.acquire()
         _LOGGER.debug("Sending: %s", data)
         if not testing:
-            self.serial.reset_input_buffer()
+            # self.serial.reset_input_buffer()
             bytessent = self.serial.write(data.encode())
             return bytessent
         else:
-            self._waiting_response = 1
             return len(data)
-
-    def XAPCommand(self, command, *args, **kwargs):
-        """Call command and return value"""
-
-        unitCode=kwargs.get('unitCode',0)
-
-        rtnCount = kwargs.get('rtnCount',1)
-        args = [str(x) for x in args]
-        xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
-        _LOGGER.debug("Sending %s" % xapstr)
-        while 1:
-            if self._waiting_response == 1:
-                time.sleep(self._sleeptime)
-            else:
-                break           
-        self.serial.reset_input_buffer()
-        self.serial.write(xapstr.encode())
-        self._waiting_response = 1
-        res = self.readResponse(numElements = rtnCount)
-        return res
 
     def readResponse(self, numElements=1):
         """Get response from unit.
 
         Args:
         numElements: How many response components to return,
-        starts from end of resposne
+                     starts from end of resposne
 
         Returns:
             response string from unit
@@ -236,10 +219,9 @@ class XAPX00(object):
             resp = self.serial.readline().decode()
             if len(resp) > 5 and resp[0:5] == "ERROR":
                 self._waiting_response = 0
-                raise Exception(resp)
+                raise XAPRespError(resp)
             _LOGGER.debug("Response %s" % resp)
             if resp.find('#') > -1:
-                self._waiting_response = 0
                 break
             if resp == '':
                 # nothing coming, have read too many lines
@@ -250,6 +232,30 @@ class XAPX00(object):
         else:
             return respitems[-numElements:]
         
+    def XAPCommand(self, command, *args, **kwargs):
+        """Call command and return value"""
+
+        unitCode = kwargs.get('unitCode',0)
+        rtnCount = kwargs.get('rtnCount',1)
+        args = [str(x) for x in args]
+
+        xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
+        self._commlock.acquire()
+        self.serial.reset_input_buffer()
+        self.serial.reset_output_buffer()
+        self.serial.write(xapstr.encode())
+        # self._waiting_response = 1
+        try:
+            res = self.readResponse(numElements = rtnCount)
+        finally:
+            self._commlock.release()
+        return res
+
+    def reset(self):
+        """Reset connection."""
+        warnings.warn("Clearing Serial Connection")
+        self.serial.reset_input_buffer()
+
     def getUniqueId(self, unitCode=0):
         """Requests the unique ID of the target XAP800.
 
@@ -259,13 +265,7 @@ class XAPX00(object):
         """
         res = self.XAPCommand("UID", unitCode=unitCode)
         return res
-
     
-    def reset(self):
-        """Reset connection."""
-        warnings.warn("Clearing Serial Connection")
-        self.serial.reset_input_buffer()
-
     @stereo
     def setDecayRate(self, channel, decayRate, unitCode=0):
         """Modify the decay rate for the specified XAP800.
@@ -327,7 +327,9 @@ class XAPX00(object):
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
         resp = self.XAPCommand("MAX", channel, group, unitCode=unitCode)
-        return float(resp)
+        if is_number(resp):
+            return float(resp)
+        else: raise XAPCommError
 
     @stereo
     def setMaxGain(self, channel, gain, group="I", unitCode=0):
@@ -335,7 +337,10 @@ class XAPX00(object):
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
         resp = self.XAPCommand("MAX", channel, group, gain, unitCode=unitCode)
-        return resp
+        if is_number(resp):
+            return resp
+        else:
+            raise XAPCommError
 
     @stereo
     def getPropGain(self, channel, group="I", unitCode=0):
@@ -347,12 +352,12 @@ class XAPX00(object):
             raise Exception('Gain not available on Expansion Bus')
         maxdb = self.getMaxGain(channel, group=group, unitCode=unitCode,
                                 stereo=0)
-        # self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "GAIN", channel,
-        #                                 group, EOM))
-        # resp = db2linear(self.readResponse(2)[0], maxdb)
-        resp = self.XAPCommand("GAIN", channel, group, unitCode=unitCode, rtnCount=2)
-        resp = db2linear(resp[0], maxdb)
-        return resp
+        resp = self.XAPCommand("GAIN", channel, group, unitCode=unitCode, rtnCount=2)[0]
+        if is_number(resp):
+            resp = db2linear(resp, maxdb)
+            return resp
+        else:
+            raise XAPCommError("resp={}".format(resp))
 
     @stereo
     def setPropGain(self, channel, gain, isAbsolute=1, group="I", unitCode=0):
@@ -367,7 +372,10 @@ class XAPX00(object):
         _LOGGER.debug("setPropGain: linear:{}, max:{}, db:{}".format( gain, maxdb, dbgain)) 
         resp = self.XAPCommand("GAIN", channel, group, dbgain, "A" if isAbsolute == 1 else "R",
                                unitCode=unitCode, rtnCount=2)[0] 
-        return db2linear(resp, maxdb)  # if self.convertDb else resp
+        if is_number(resp):
+            return db2linear(resp, maxdb)
+        else:
+            raise XAPCommError
 
     @stereo
     def getGain(self, channel, group="I", unitCode=0):
@@ -376,8 +384,11 @@ class XAPX00(object):
             raise Exception('Gain not available on Expansion Bus')
         else:
             resp = self.XAPCommand("GAIN", channel, group, unitCode = unitCode,
-                                   rtnCount=2)[0] 
-        return db2linear(resp) if self.convertDb else resp
+                                   rtnCount=2)[0]
+        if is_number(resp):
+            return db2linear(resp) if self.convertDb else resp
+        else:
+            raise XAPCommError
 
     @stereo
     def setGain(self, channel, gain, isAbsolute=1, group="I", unitCode=0):
@@ -398,7 +409,10 @@ class XAPX00(object):
             resp = 20.0 # or raise error?????
         resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
                                unitCode=unitCode, rtnCount=2)[0]
-        return db2linear(resp) if self.convertDb else resp
+        if is_number(resp):
+            return db2linear(resp) if self.convertDb else resp
+        else:
+            raise XAPCommError
 
     @stereo
     def getLevel(self, channel, group="I", stage="I", unitCode=0):
@@ -415,8 +429,10 @@ class XAPX00(object):
                   group + " " + stage + " " + EOM)
         return float(self.readResponse())
         resp = self.XAPCommand("LVL", channel, group, stage, unitCode=unitCode)
-        return float(resp)
-    
+        if is_number(resp):
+            return float(resp)
+        else:
+            raise XAPCommError
 
     def getLabel(self, channel, group, unitCode=0):
         """Retrieve the text label assigned to an inpout or ouput"""
@@ -550,7 +566,7 @@ class XAPX00(object):
 
         Args:
         unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8 or *, A-D, 1-2)
+       channel - the target channel (1-8 or *, A-D, 1-2)
         group -   I=Input, O=Output, M=Mike, etc
         Return:
             isMuted - 1=muted, 0 = unmute

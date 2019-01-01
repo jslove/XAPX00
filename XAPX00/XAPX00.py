@@ -25,7 +25,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2.4'
+__version__ = '0.2.5'
 
 import serial
 import logging
@@ -165,10 +165,11 @@ class XAPX00(object):
         self.ExpansionChannels = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
         self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
         self._commlock = Lock()
-        self.connect(check=True)
+#        self.connect(check=True)
 
     def connect(self, check=False):
         """Open serial port and check connection."""
+        _LOGGER.info("connect called, shouldn't be")
         if self.connected:
             return
         self.serial = serial.Serial(self.comPort, self.baudRate,
@@ -186,6 +187,7 @@ class XAPX00(object):
 
     def disconnect(self):
         """Disconnect from serial port"""
+        _LOGGER.info("disconnect called shouldn't be")
         if self.connected:
             self.serial.close()
             self.connected = 0
@@ -196,16 +198,21 @@ class XAPX00(object):
         Returns:
             number of bytes sent
         """
+        
+        _LOGGER.info("Old style send called")
         self._commlock.acquire()
+        serialconn = serial.Serial(self.comPort, self.baudRate,
+                                   timeout=self.timeout)
         _LOGGER.debug("Sending: %s", data)
         if not testing:
             # self.serial.reset_input_buffer()
             bytessent = self.serial.write(data.encode())
+            serialconn.close()
             return bytessent
         else:
             return len(data)
 
-    def readResponse(self, numElements=1):
+    def readResponse(self, numElements=1, serial_conn=None):
         """Get response from unit.
 
         Args:
@@ -215,8 +222,14 @@ class XAPX00(object):
         Returns:
             response string from unit
         """
+        if not serial_conn:
+            serialconn = serial.Serial(self.comPort, self.baudRate,
+                                       timeout=self.timeout)
+        else:
+            serialconn = serial_conn
+
         while 1:
-            resp = self.serial.readline().decode()
+            resp = serialconn.readline().decode()
             if len(resp) > 5 and resp[0:5] == "ERROR":
                 self._waiting_response = 0
                 raise XAPRespError(resp)
@@ -226,6 +239,8 @@ class XAPX00(object):
             if resp == '':
                 # nothing coming, have read too many lines
                 return None
+        if serial_conn is None:
+            serialconn.close()
         respitems = resp.split("#",maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
@@ -235,22 +250,28 @@ class XAPX00(object):
     def XAPCommand(self, command, *args, **kwargs):
         """Call command and return value"""
 
+        self._commlock.acquire()
+        serialconn = serial.Serial(self.comPort, self.baudRate,
+                                   timeout=self.timeout)
+
         unitCode = kwargs.get('unitCode',0)
         rtnCount = kwargs.get('rtnCount',1)
         args = [str(x) for x in args]
 
         xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
-        self._commlock.acquire()
-        self.serial.reset_input_buffer()
-        self.serial.reset_output_buffer()
-        self.serial.write(xapstr.encode())
+        serialconn.write(xapstr.encode())
         # self._waiting_response = 1
         try:
-            res = self.readResponse(numElements = rtnCount)
+            res = self.readResponse(numElements = rtnCount, serial_conn=serialconn)
         finally:
             self._commlock.release()
+            serialconn.close()
         return res
 
+    def test_connection(self):
+        id = self.getUniqueId(0)
+        return isinstance(id,str)
+    
     def reset(self):
         """Reset connection."""
         warnings.warn("Clearing Serial Connection")
@@ -425,9 +446,6 @@ class XAPX00(object):
         group - the target channel type
         stage - See documentation
         """
-        self.send(XAP800_CMD + str(unitCode) + " LVL " + str(channel) + " " +
-                  group + " " + stage + " " + EOM)
-        return float(self.readResponse())
         resp = self.XAPCommand("LVL", channel, group, stage, unitCode=unitCode)
         if is_number(resp):
             return float(resp)
@@ -436,10 +454,9 @@ class XAPX00(object):
 
     def getLabel(self, channel, group, unitCode=0):
         """Retrieve the text label assigned to an inpout or ouput"""
-        self.send("%s%s %s %s %s %s" % (XAP800_CMD, unitCode, "LABEL",
-                                        channel, group, EOM))
-        return self.readResponse()
-
+        resp = self.XAPCommand("LABEL", channel, group, unitCode=unitCode)
+        return resp
+    
     @stereo
     def setMatrixRouting(self, inChannel, outChannel, state=1, inGroup="I",
                          outGroup="O", unitCode=0):
@@ -639,9 +656,8 @@ class XAPX00(object):
                 levelInDb = 0
         elif levelInDb < -70:
                 levelInDb = -70
-        self.send("%s%s %s %s %s %s" %
-                  (XAP800_CMD, unitCode, "AMBLVL", channel, levelInDb, EOM))
-        self.readResponse()
+        resp = self.XAPCommand("AMBLVL", channel, levelInDb, unitCode=unitCode)
+        return float(resp)
 
     def getAmbientLevel(self, channel, unitCode=0):
         """Requests the fixed ambient level of the specified XAP800.
@@ -650,9 +666,8 @@ class XAPX00(object):
             channel: mic channel 1-9
             unitCode - the unit code of the target XAP800
         """
-        self.send("%s%s %s %s %s" %
-                  (XAP800_CMD, unitCode, "AMBLVL", channel, EOM))
-        return float(self.readResponse())
+        resp = self.XAPCommand("AMBLVL", channel, unitCode=unitCode)
+        return float(resp)
 
     def getSetBaudRate(self, baudRate, unitCode=0):
         """Set the baud rate for the RS232 port on the specified XAP800.
@@ -678,9 +693,8 @@ class XAPX00(object):
         channel - 1-8 for specific mic channel, or * for all mics
         isEnabled - 0=off, 1=om, 2=toggle
         """
-        self.send(XAP800_CMD + unitCode + " CHAIRO " + channel +
-                  ("1" if isEnabled else "0") + EOM)
-        return int(self.readResponse())
+        resp = self.XAPCommand("CHAIRO", channel, "1" if isEnabled else "0", unitCode=unitCode)
+        return int(resp)
 
     def getChairmanOverride(self, channel, isEnabled=0, unitCode=0):
         """Modifies the state of the chairman override a microphone(s).
@@ -689,9 +703,8 @@ class XAPX00(object):
         channel - 1-8 for specific mic channel, or * for all mics
         isEnabled - 0=off, 1=om, 2=toggle
         """
-        self.send(XAP800_CMD + unitCode + " CHAIRO " + channel +
-                  EOM)
-        return int(self.readResponse())
+        resp = self.XAPCommand("CHAIRO", channel, unitCode=unitCode)
+        return int(resp)
 
     def setPreset(self, preset, state=1, unitCode=0):
         """Run the preset.
@@ -700,15 +713,13 @@ class XAPX00(object):
         state: 1: execute preset, set state=on
         state: 2: execute preset, set state=off
         """
-        self.send("%s%s %s %s %s" % (XAP800_CMD, unitCode,
-                                     "PRESET", state, EOM))
-        return int(self.readResponse())
+        resp = self.XAPCommand("PRESET", channel, state, unitCode=unitCode)
+        return int(resp)
 
     def getPreset(self, preset, state=1, unitCode=0):
         """Get the preset state"""
-        self.send("%s%s %s %s" % (XAP800_CMD, unitCode,
-                                  "PRESET", EOM))
-        return int(self.readResponse())
+        resp = self.XAPCommand("PRESET", channel, unitCode=unitCode)
+        return int(resp)
 
     def usePreset(self, preset, unitCode=0):
         """Cause the XAP800 to swap its settings for the given preset.
@@ -717,8 +728,8 @@ class XAPX00(object):
             unitCode - the unit code of the target XAP800
             preset - the preset to switch to (1-6)
         """
-        self.send(XAP800_CMD + unitCode + " PRESET " + preset + EOM)
-        return int(self.readResponse())
+        resp = self.XAPCommand("PRESET", channel, preset, unitCode=unitCode)
+        return int(resp)
 
     def requestPreset(self, preset, unitCode=0):
         """Request the current preset in use for the specified XAP800.
@@ -726,8 +737,8 @@ class XAPX00(object):
         Args:
             unitCode - the unit code of the target XAP800
         """
-        self.send(XAP800_CMD + unitCode + " PRESET" + EOM)
-        return int(self.readResponse())
+        resp = self.XAPCommand("PRESET", channel, unitCode=unitCode)
+        return int(resp)
 
     def getEchoReturnLoss(self, channel, unitCode=0):
         """Request the status of the echo return loss.
@@ -735,9 +746,8 @@ class XAPX00(object):
         unitCode - the unit code of the target XAP800
         channel - the target channel
         """
-        self.send("{}{} {} {} {}".format(XAP800_CMD, unitCode,
-                                         "ERL", channel, EOM))
-        return int(self.readResponse())
+        resp = self.XAPCommand("ERL", channel, unitCode=unitCode)
+        return int(resp)
 
     def getEchoReturnLossEnhancement(self, channel, unitCode=0):
         """Request the status of the echo return loss enhancement.
@@ -745,8 +755,8 @@ class XAPX00(object):
         unitCode - the unit code of the target XAP800
         channel - the target channel
         """
-        self.send(XAP800_CMD + unitCode + " ERLE " + channel + EOM)
-        return int(self.readResponse())
+        resp = self.XAPCommand("ERLE", channel, unitCode=unitCode)
+        return int(resp)
 
     def enableEqualizer(self, channel, isEnabled=True, unitCode=0):
         """Enable or disable the equalizer for channel-unit.
@@ -755,9 +765,8 @@ class XAPX00(object):
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
-        self.send(XAP800_CMD + unitCode + " EQ " + channel + " " +
-                  ("1" if isEnabled else "0") + EOM)
-        return bool(self.readResponse())
+        resp = self.XAPCommand("EQ", channel, "1" if isEnabled else "0", unitCode=unitCode)
+        return bool(resp)
 
     def setDefaultMeter(self, channel, isInput, unitCode=0):
         """Modify the default meter.

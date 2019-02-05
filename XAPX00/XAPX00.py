@@ -1,5 +1,3 @@
-# pylint: disable=E221
-
 """
 XAPX00 Control.
 
@@ -25,7 +23,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2.5'
+__version__ = '0.2.6'
 
 import serial
 import logging
@@ -52,10 +50,8 @@ if 0:
 # Global Constants
 XAP800_CMD = "#5"
 XAP400_CMD = "#7"
-XAP800Type = "XAP800"
-XAP400Type = "XAP400"
-XAP800_LOCATION_PREFIX = "XAP800"
-XAP800_UNIT_TYPE = 1
+XAP800TYPE = "XAP800"
+XAP400TYPE = "XAP400"
 EOM = "\r"
 DEVICE_MAXMICS = "Max Number of Microphones"
 matrixGeo = {'XAP800': 12, 'XAP400': 8}
@@ -141,7 +137,7 @@ class XAPX00(object):
     """XAPX000 Module."""
 
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
-                 stereo=0, XAPType=XAP800Type):
+                 stereo=0, XAPType=XAP800TYPE):
         """init: no parameters required."""
         _LOGGER.info("XAPX00 version: {}".format(__version__))
         self.comPort      = comPort
@@ -152,7 +148,7 @@ class XAPX00(object):
         self.timeout      = 1
         self.stereo       = stereo
         self.XAPType      = XAPType
-        self.XAPCMD       = XAP800_CMD if XAPType == XAP800Type else XAP400_CMD
+        self.XAPCMD       = XAP800_CMD if XAPType == XAP800TYPE else XAP400_CMD
         self.connected    = 0
         self.input_range  = range(1, 13)
         self.output_range = range(1, 13)
@@ -323,7 +319,7 @@ class XAPX00(object):
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
-        if self.XAPType == XAP800Type: ec="AEC"
+        if self.XAPType == XAP800TYPE: ec="AEC"
         else: ec = "EC"
         res = self.XAPCommand(ec, channel, "1" if isEnabled else "0", unitCode=unitCode)
         return int(res)
@@ -337,13 +333,13 @@ class XAPX00(object):
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
-        if self.XAPType == XAP800Type: ec="AEC"
+        if self.XAPType == XAP800TYPE: ec="AEC"
         else: ec = "EC"
         res = self.XAPCommand(ec, channel, unitCode=unitCode)
         return int(res)
 
     @stereo
-    def getMaxGain(self, channel, group="I", unitCode=0):
+    def getMaxGain(self, channel, group="I", unitCode=0, **kwargs):
         """Get max gain setting for a channel."""
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
@@ -480,7 +476,7 @@ class XAPX00(object):
 
     @stereo
     def getMatrixRouting(self, inChannel, outChannel, inGroup="I",
-                         outGroup="O", unitCode=0):
+                         outGroup="O", unitCode=0, **kwargs):
         """Gets the routing matrix for the target channel
 
         Args:
@@ -536,7 +532,7 @@ class XAPX00(object):
 
     @stereo
     def getMatrixLevel(self, inChannel, outChannel, inGroup="I",
-                       outGroup="O", unitCode=0):
+                       outGroup="O", unitCode=0, **kwargs):
         """
         Gets the matrix level at the crosspoint
 
@@ -672,17 +668,17 @@ class XAPX00(object):
     def getSetBaudRate(self, baudRate, unitCode=0):
         """Set the baud rate for the RS232 port on the specified XAP800.
 
-        unitCode - the unit code of the target XAP800
+        unitCode - the unit code of the target XAP
         baudRate - the baud rate (9600, 19200, or 38400)
         """
-        if self.XAPType == XAP400Type:
+        if self.XAPType == XAP400TYPE:
             baudRateCode = {9600: 1, 19200: 2, 38400: 3, " ": " ", "":" "}
             rateBaudCode = {v: k for k, v in baudRateCode.items()}
             baud = baudRateCode.get(baudRate,3)
         else:
             baud = baudRate
         res = self.XAPCommand("BAUD", baud, unitCode=unitCode)
-        if self.XAPType == XAP400Type:
+        if self.XAPType == XAP400TYPE:
             res = rateBaudCode.get(res, 0)
         return res
 
@@ -713,12 +709,12 @@ class XAPX00(object):
         state: 1: execute preset, set state=on
         state: 2: execute preset, set state=off
         """
-        resp = self.XAPCommand("PRESET", channel, state, unitCode=unitCode)
+        resp = self.XAPCommand("PRESET", state, unitCode=unitCode)
         return int(resp)
 
     def getPreset(self, preset, state=1, unitCode=0):
         """Get the preset state"""
-        resp = self.XAPCommand("PRESET", channel, unitCode=unitCode)
+        resp = self.XAPCommand("PRESET", unitCode=unitCode)
         return int(resp)
 
     def usePreset(self, preset, unitCode=0):
@@ -728,7 +724,7 @@ class XAPX00(object):
             unitCode - the unit code of the target XAP800
             preset - the preset to switch to (1-6)
         """
-        resp = self.XAPCommand("PRESET", channel, preset, unitCode=unitCode)
+        resp = self.XAPCommand("PRESET", preset, unitCode=unitCode)
         return int(resp)
 
     def requestPreset(self, preset, unitCode=0):
@@ -737,7 +733,7 @@ class XAPX00(object):
         Args:
             unitCode - the unit code of the target XAP800
         """
-        resp = self.XAPCommand("PRESET", channel, unitCode=unitCode)
+        resp = self.XAPCommand("PRESET", unitCode=unitCode)
         return int(resp)
 
     def getEchoReturnLoss(self, channel, unitCode=0):
@@ -1388,4 +1384,4 @@ class XAPX00(object):
 
     def getHumanErrorDescription(self, errorMsg):
         """Translates ERROR replies from the XAP800 into a human-readable description of the problem."""
-        return errorDefs.get(errorMsg, "Unknown Error")
+        return self.errorDefs.get(errorMsg, "Unknown Error")

@@ -255,6 +255,7 @@ class XAPX00(object):
         args = [str(x) for x in args]
 
         xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
+        _LOGGER.debug("sending command: {}".format(xapstr))
         serialconn.write(xapstr.encode())
         # self._waiting_response = 1
         try:

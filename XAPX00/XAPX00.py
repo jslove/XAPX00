@@ -23,7 +23,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2.6'
+__version__ = '0.2.7'
 
 import serial
 import logging
@@ -148,6 +148,7 @@ class XAPX00(object):
         self.timeout      = 1
         self.stereo       = stereo
         self.XAPType      = XAPType
+        self.MatrixGeo    = matrixGeo[self.XAPType] 
         self.XAPCMD       = XAP800_CMD if XAPType == XAP800TYPE else XAP400_CMD
         self.connected    = 0
         self.input_range  = range(1, 13)
@@ -221,6 +222,7 @@ class XAPX00(object):
         if not serial_conn:
             serialconn = serial.Serial(self.comPort, self.baudRate,
                                        timeout=self.timeout)
+            self._commlock.acquire()
         else:
             serialconn = serial_conn
 
@@ -237,6 +239,7 @@ class XAPX00(object):
                 return None
         if serial_conn is None:
             serialconn.close()
+            self._commlock.release()
         respitems = resp.split("#",maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
@@ -266,6 +269,15 @@ class XAPX00(object):
         return res
 
     def test_connection(self):
+        self._commlock.acquire()
+        serialconn = serial.Serial(self.comPort, self.baudRate,
+                                   timeout=self.timeout)
+        _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
+                         " baud...")
+            # Ensure connectivity by requesting the UID of the first unit
+        serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
+        resp = serialconn.readlines() #clear response
+        self._commlock.release()
         id = self.getUniqueId(0)
         return isinstance(id,str)
     

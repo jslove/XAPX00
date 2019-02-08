@@ -19,7 +19,7 @@ def read(fname):
 # and be sure to test it firstly using "python setup.py register sdist upload -r pypitest"
 
 setup(name='XAPX00',
-      version='0.2.7',
+      version='0.2.8',
       description='Control an XAP800/XAP400 unit',
       long_description=read('README.md'),
       install_requires=['pyserial>=3.3'],

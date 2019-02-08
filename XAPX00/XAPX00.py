@@ -23,7 +23,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2.7'
+__version__ = '0.2.8'
 
 import serial
 import logging
@@ -148,7 +148,7 @@ class XAPX00(object):
         self.timeout      = 1
         self.stereo       = stereo
         self.XAPType      = XAPType
-        self.MatrixGeo    = matrixGeo[self.XAPType] 
+        self.matrixGeo    = matrixGeo[self.XAPType] 
         self.XAPCMD       = XAP800_CMD if XAPType == XAP800TYPE else XAP400_CMD
         self.connected    = 0
         self.input_range  = range(1, 13)
@@ -399,6 +399,7 @@ class XAPX00(object):
             raise Exception('Gain not available on Expansion Bus')
         maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
         dbgain = linear2db(gain, maxdb)  # if self.convertDb else gain
+        dbgain = "{0:.4}".format(dbgain)
         _LOGGER.debug("setPropGain: linear:{}, max:{}, db:{}".format( gain, maxdb, dbgain)) 
         resp = self.XAPCommand("GAIN", channel, group, dbgain, "A" if isAbsolute == 1 else "R",
                                unitCode=unitCode, rtnCount=2)[0] 
@@ -435,6 +436,7 @@ class XAPX00(object):
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
         gain = linear2db(gain) if self.convertDb else gain
+        gain = "{0:.4f}".format(gain)
         if group in ('E'):  # can't set GAIN on expansion bus
             resp = 20.0 # or raise error?????
         resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
@@ -513,9 +515,9 @@ class XAPX00(object):
     def getMatrixRoutingReport(self, unitCode=0):
         """Returns a matrix of levels as a list of lists"""
         routingMatrix = []
-        for x in range(0, matrixGeo[self.XAPType]):
+        for x in range(0, self.matrixGeo):
             routingMatrix.append([])
-            for y in range(0, matrixGeo[self.XAPType]):
+            for y in range(0, self.matrixGeo):
                 routingMatrix[x].append(self.getMatrixRouting(
                     x + 1, y + 1, unitCode=unitCode, stereo=0))
         return routingMatrix
@@ -565,9 +567,9 @@ class XAPX00(object):
     def getMatrixLevelReport(self, unitCode=0):
         """Returns a matrix of levels as a list of lists"""
         levelMatrix = []
-        for x in range(0, matrixGeo[self.XAPType]):
+        for x in range(0, self.matrixGeo):
             levelMatrix.append([])
-            for y in range(0, matrixGeo[self.XAPType]):
+            for y in range(0, self.matrixGeo):
                 levelMatrix[x].append(self.getMatrixLevel(
                     x + 1, y + 1, unitCode=unitCode, stereo=0))
         return levelMatrix

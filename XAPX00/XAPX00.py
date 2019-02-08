@@ -23,7 +23,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2.8'
+__version__ = '0.2.8.1'
 
 import serial
 import logging
@@ -104,7 +104,7 @@ def stereo(func):
 
 
 def is_number(s):
-    """ Returns True is string is a number. """
+    """ Returns True if string is a number. """
     return s.replace('.','',1).replace('-','',1).isdigit()
 
 def db2linear(db, maxref=0):
@@ -399,7 +399,7 @@ class XAPX00(object):
             raise Exception('Gain not available on Expansion Bus')
         maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
         dbgain = linear2db(gain, maxdb)  # if self.convertDb else gain
-        dbgain = "{0:.4}".format(dbgain)
+        dbgain = "{0:.4f}".format(dbgain)
         _LOGGER.debug("setPropGain: linear:{}, max:{}, db:{}".format( gain, maxdb, dbgain)) 
         resp = self.XAPCommand("GAIN", channel, group, dbgain, "A" if isAbsolute == 1 else "R",
                                unitCode=unitCode, rtnCount=2)[0] 

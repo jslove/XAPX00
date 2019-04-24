@@ -23,7 +23,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.2.8.1'
+__version__ = '0.2.8.2'
 
 import serial
 import logging

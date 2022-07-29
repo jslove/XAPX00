@@ -228,7 +228,7 @@ class XAPX00(object):
         if not serial_conn:
             if self.comPort.startswith("socket://"):
                 serialconn = serial.serial_for_url(self.comPort)
-              else:
+            else:
                 serialconn = serial.Serial(self.comPort, self.baudRate,
                                             timeout=self.timeout)
             self._commlock.acquire()

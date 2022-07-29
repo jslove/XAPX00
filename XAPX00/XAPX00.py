@@ -170,9 +170,9 @@ class XAPX00(object):
         if self.connected:
             return
         if self.comPort.startswith("socket://"):
-          self.serial = serial.serial_for_url(self.comPort)
+            self.serial = serial.serial_for_url(self.comPort)
         else:
-          self.serial = serial.Serial(self.comPort, self.baudRate,
+            self.serial = serial.Serial(self.comPort, self.baudRate,
                                       timeout=self.timeout)
         if check:
             _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
@@ -201,8 +201,11 @@ class XAPX00(object):
         
         _LOGGER.info("Old style send called")
         self._commlock.acquire()
-        serialconn = serial.Serial(self.comPort, self.baudRate,
-                                   timeout=self.timeout)
+        if self.comPort.startswith("socket://"):
+          serialconn = serial.serial_for_url(self.comPort)
+        else:
+          serialconn = serial.Serial(self.comPort, self.baudRate,
+                                      timeout=self.timeout)
         _LOGGER.debug("Sending: %s", data)
         if not testing:
             # self.serial.reset_input_buffer()
@@ -223,8 +226,11 @@ class XAPX00(object):
             response string from unit
         """
         if not serial_conn:
-            serialconn = serial.Serial(self.comPort, self.baudRate,
-                                       timeout=self.timeout)
+            if self.comPort.startswith("socket://"):
+                serialconn = serial.serial_for_url(self.comPort)
+              else:
+                serialconn = serial.Serial(self.comPort, self.baudRate,
+                                            timeout=self.timeout)
             self._commlock.acquire()
         else:
             serialconn = serial_conn
@@ -253,8 +259,11 @@ class XAPX00(object):
         """Call command and return value"""
 
         self._commlock.acquire()
-        serialconn = serial.Serial(self.comPort, self.baudRate,
-                                   timeout=self.timeout)
+        if self.comPort.startswith("socket://"):
+            serialconn = serial.serial_for_url(self.comPort)
+        else:
+            serialconn = serial.Serial(self.comPort, self.baudRate,
+                                      timeout=self.timeout)
 
         unitCode = kwargs.get('unitCode',0)
         rtnCount = kwargs.get('rtnCount',1)
@@ -273,8 +282,11 @@ class XAPX00(object):
 
     def test_connection(self):
         self._commlock.acquire()
-        serialconn = serial.Serial(self.comPort, self.baudRate,
-                                   timeout=self.timeout)
+        if self.comPort.startswith("socket://"):
+            serialconn = serial.serial_for_url(self.comPort)
+        else:
+            serialconn = serial.Serial(self.comPort, self.baudRate,
+                                      timeout=self.timeout)
         _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
                          " baud...")
             # Ensure connectivity by requesting the UID of the first unit

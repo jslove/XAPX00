@@ -169,8 +169,11 @@ class XAPX00(object):
         _LOGGER.info("connect called, shouldn't be")
         if self.connected:
             return
-        self.serial = serial.Serial(self.comPort, self.baudRate,
-                                    timeout=self.timeout)
+        if self.comPort.startswith("socket://"):
+          self.serial = serial.serial_for_url(self.comPort)
+        else:
+          self.serial = serial.Serial(self.comPort, self.baudRate,
+                                      timeout=self.timeout)
         if check:
             _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
                          " baud...")

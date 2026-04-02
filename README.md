@@ -1,7 +1,6 @@
 # XAPX00
 Python Module to control ClearOne Genter XAP 400/800 Audio Conferencing System
 
-
 This module facilitates control of a XAP system connected to a serial port (probably through a USB connection.)
 
 This code is adapted from a javascript library written by Dan Rudman.

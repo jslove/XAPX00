@@ -151,6 +151,7 @@ class XAPX00(object):
         self.matrixGeo    = matrixGeo[self.XAPType] 
         self.XAPCMD       = XAP800_CMD if XAPType == XAP800TYPE else XAP400_CMD
         self.connected    = 0
+        self.connectionLive = 0
         self.input_range  = range(1, 13)
         self.output_range = range(1, 13)
         self.convertDb    = 1  # translate levels between linear(0-1) and db
@@ -248,7 +249,7 @@ class XAPX00(object):
         
     def XAPCommand(self, command, *args, **kwargs):
         """Call command and return value"""
-
+        res = 0
         self._commlock.acquire()
         serialconn = serial.Serial(self.comPort, self.baudRate,
                                    timeout=self.timeout)
@@ -263,21 +264,31 @@ class XAPX00(object):
         # self._waiting_response = 1
         try:
             res = self.readResponse(numElements = rtnCount, serial_conn=serialconn)
+            self.connectionLive = 1
+        except:
+            self.connectionLive = 0
         finally:
             self._commlock.release()
             serialconn.close()
         return res
 
     def test_connection(self):
+      """ return True if connection works, False if not """
+        id = 0
         self._commlock.acquire()
         serialconn = serial.Serial(self.comPort, self.baudRate,
                                    timeout=self.timeout)
         _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
                          " baud...")
             # Ensure connectivity by requesting the UID of the first unit
-        serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
-        resp = serialconn.readlines() #clear response
-        self._commlock.release()
+        try:
+          serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
+          resp = serialconn.readlines() #clear response
+          self.connectionLive = 1
+        except:
+          self.connectionLive = 0
+        finally:
+          self._commlock.release()
         id = self.getUniqueId(0)
         return isinstance(id,str)
     
@@ -594,10 +605,10 @@ class XAPX00(object):
 
         Args:
         unitCode - the unit code of the target XAP800
-       channel - the target channel (1-8 or *, A-D, 1-2)
+        channel - the target channel (1-8 or *, A-D, 1-2)
         group -   I=Input, O=Output, M=Mike, etc
         Return:
-            isMuted - 1=muted, 0 = unmute
+            isMuted - 1=muted, 0=not muted
         """
         resp = self.XAPCommand("MUTE", channel, group, unitCode=unitCode)
         return int(resp)

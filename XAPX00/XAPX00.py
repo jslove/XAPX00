@@ -30,7 +30,6 @@ import logging
 import math
 import time
 import warnings
-import time
 import string
 from threading import Lock
 from functools import wraps
@@ -84,13 +83,13 @@ def stereo(func):
         if args[0].stereo and _stereo:  # self.stereo
             _LOGGER.debug("Stereo Command {}:{}".format(func.__name__, args))
             largs = list(args)
-            if type(largs[1]) == str:
+            if isinstance(largs[1], str):
                 largs[1] = chr(ord(largs[1])+1)
             else:
                 largs[1] = largs[1] + 1
             if func.__name__[3:9] == "Matrix":  # do stereo on input and output
                 _LOGGER.debug("Matrix Stereo Command {}".format(func.__name__))
-                if type(largs[2]) == str:
+                if isinstance(largs[2], str):
                     largs[2] = chr(ord(largs[2])+1)
                 else:
                     largs[2] = largs[2] + 1
@@ -213,7 +212,7 @@ class XAPX00(object):
         _LOGGER.debug("Sending: %s", data)
         if not testing:
             # self.serial.reset_input_buffer()
-            bytessent = self.serial.write(data.encode())
+            bytessent = serialconn.write(data.encode())
             serialconn.close()
             return bytessent
         else:
@@ -229,7 +228,7 @@ class XAPX00(object):
         Returns:
             response string from unit
         """
-        if not serial_conn:
+        if serial_conn is None:
             serialconn = self.get_serial_port()
             self._commlock.acquire()
         else:
@@ -272,7 +271,7 @@ class XAPX00(object):
         try:
             res = self.readResponse(numElements = rtnCount, serial_conn=serialconn)
             self.connectionLive = 1
-        except:
+        except Exception:
             self.connectionLive = 0
         finally:
             self._commlock.release()
@@ -280,18 +279,17 @@ class XAPX00(object):
         return res
 
     def test_connection(self):
-      """ return True if connection works, False if not """
-        id = 0
+        """ return True if connection works, False if not """
         self._commlock.acquire()
         serialconn = self.get_serial_port()
         _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
                          " baud...")
-            # Ensure connectivity by requesting the UID of the first unit
+        # Ensure connectivity by requesting the UID of the first unit
         try:
           serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
-          resp = serialconn.readlines() #clear response
+          serialconn.readlines()  # clear response
           self.connectionLive = 1
-        except:
+        except Exception:
           self.connectionLive = 0
         finally:
           self._commlock.release()
@@ -324,9 +322,9 @@ class XAPX00(object):
         """
         # Ensure compliance with level boundary conditions
         if decayRate < 1:
-                decayRate = 1
+            decayRate = 1
         elif decayRate > 3:
-                decayRate = 3
+            decayRate = 3
         res = self.XAPCommand("DECAY", channel, decayRate, unitCode=unitCode)
         return int(res)
 
@@ -349,8 +347,10 @@ class XAPX00(object):
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
-        if self.XAPType == XAP800TYPE: ec="AEC"
-        else: ec = "EC"
+        if self.XAPType == XAP800TYPE:
+            ec = "AEC"
+        else:
+            ec = "EC"
         res = self.XAPCommand(ec, channel, "1" if isEnabled else "0", unitCode=unitCode)
         return int(res)
 
@@ -363,8 +363,10 @@ class XAPX00(object):
         channel - the target channel (1-8, or * for all)
         isEnabled - true to enable the channel, false to disable
         """
-        if self.XAPType == XAP800TYPE: ec="AEC"
-        else: ec = "EC"
+        if self.XAPType == XAP800TYPE:
+            ec = "AEC"
+        else:
+            ec = "EC"
         res = self.XAPCommand(ec, channel, unitCode=unitCode)
         return int(res)
 
@@ -454,8 +456,6 @@ class XAPX00(object):
             raise Exception('Gain not available on Expansion Bus')
         gain = linear2db(gain) if self.convertDb else gain
         gain = "{0:.4f}".format(gain)
-        if group in ('E'):  # can't set GAIN on expansion bus
-            resp = 20.0 # or raise error?????
         resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
                                unitCode=unitCode, rtnCount=2)[0]
         if is_number(resp):
@@ -681,9 +681,9 @@ class XAPX00(object):
         """
         # Ensure compliance with level boundary conditions
         if levelInDb > 0:
-                levelInDb = 0
+            levelInDb = 0
         elif levelInDb < -70:
-                levelInDb = -70
+            levelInDb = -70
         resp = self.XAPCommand("AMBLVL", channel, levelInDb, unitCode=unitCode)
         return float(resp)
 

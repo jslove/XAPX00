@@ -724,7 +724,7 @@ class XAPX00(object):
         resp = self.XAPCommand("CHAIRO", channel, "1" if isEnabled else "0", unitCode=unitCode)
         return int(resp)
 
-    def getChairmanOverride(self, channel, isEnabled=0, unitCode=0):
+    def getChairmanOverride(self, channel, unitCode=0):
         """Modifies the state of the chairman override a microphone(s).
 
         unitCode - the unit code of the target XAP800
@@ -741,12 +741,12 @@ class XAPX00(object):
         state: 1: execute preset, set state=on
         state: 2: execute preset, set state=off
         """
-        resp = self.XAPCommand("PRESET", state, unitCode=unitCode)
+        resp = self.XAPCommand("PRESET", preset, state, unitCode=unitCode)
         return int(resp)
 
-    def getPreset(self, preset, state=1, unitCode=0):
+    def getPreset(self, preset, unitCode=0):
         """Get the preset state"""
-        resp = self.XAPCommand("PRESET", unitCode=unitCode)
+        resp = self.XAPCommand("PRESET", preset, unitCode=unitCode)
         return int(resp)
 
     def usePreset(self, preset, unitCode=0):
@@ -757,15 +757,6 @@ class XAPX00(object):
             preset - the preset to switch to (1-6)
         """
         resp = self.XAPCommand("PRESET", preset, unitCode=unitCode)
-        return int(resp)
-
-    def requestPreset(self, preset, unitCode=0):
-        """Request the current preset in use for the specified XAP800.
-
-        Args:
-            unitCode - the unit code of the target XAP800
-        """
-        resp = self.XAPCommand("PRESET", unitCode=unitCode)
         return int(resp)
 
     def getEchoReturnLoss(self, channel, unitCode=0):

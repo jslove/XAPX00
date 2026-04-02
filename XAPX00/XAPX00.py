@@ -142,10 +142,10 @@ class XAPX00(object):
         _LOGGER.info("XAPX00 version: {}".format(__version__))
         self.comPort      = comPort
         self.baudRate     = baudRate
-        self.byteLength   = 8
-        self.stopBits     = 1
-        self.parity       = "N"
-        self.timeout      = 1
+        self.byteLength   = serial.EIGHTBITS
+        self.stopBits     = serial.STOPBITS_ONE
+        self.parity       = serial.PARITY_NONE
+        self.timeout      = 2
         self.stereo       = stereo
         self.XAPType      = XAPType
         self.matrixGeo    = matrixGeo[self.XAPType] 
@@ -165,13 +165,23 @@ class XAPX00(object):
         self._commlock = Lock()
 #        self.connect(check=True)
 
+    def get_serial_port(self):
+        serialconn = serial.serial_for_url(self.comPort, do_not_open=True)
+        serialconn.baudrate = self.baudRate
+        serialconn.stopbits = self.stopBits
+        serialconn.bytesize = self.byteLength
+        serialconn.parity = self.parity
+        serialconn.timeout = self.timeout
+        serialconn.write_timeout = self.timeout
+        serialconn.open()
+        return serialconn
+
     def connect(self, check=False):
         """Open serial port and check connection."""
         _LOGGER.info("connect called, shouldn't be")
         if self.connected:
             return
-        self.serial = serial.Serial(self.comPort, self.baudRate,
-                                    timeout=self.timeout)
+        self.serial = self.get_serial_port()
         if check:
             _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
                          " baud...")
@@ -199,8 +209,7 @@ class XAPX00(object):
         
         _LOGGER.info("Old style send called")
         self._commlock.acquire()
-        serialconn = serial.Serial(self.comPort, self.baudRate,
-                                   timeout=self.timeout)
+        serialconn = self.get_serial_port()
         _LOGGER.debug("Sending: %s", data)
         if not testing:
             # self.serial.reset_input_buffer()
@@ -221,8 +230,7 @@ class XAPX00(object):
             response string from unit
         """
         if not serial_conn:
-            serialconn = serial.Serial(self.comPort, self.baudRate,
-                                       timeout=self.timeout)
+            serialconn = self.get_serial_port()
             self._commlock.acquire()
         else:
             serialconn = serial_conn
@@ -251,8 +259,7 @@ class XAPX00(object):
         """Call command and return value"""
         res = 0
         self._commlock.acquire()
-        serialconn = serial.Serial(self.comPort, self.baudRate,
-                                   timeout=self.timeout)
+        serialconn = self.get_serial_port()
 
         unitCode = kwargs.get('unitCode',0)
         rtnCount = kwargs.get('rtnCount',1)
@@ -276,8 +283,7 @@ class XAPX00(object):
       """ return True if connection works, False if not """
         id = 0
         self._commlock.acquire()
-        serialconn = serial.Serial(self.comPort, self.baudRate,
-                                   timeout=self.timeout)
+        serialconn = self.get_serial_port()
         _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
                          " baud...")
             # Ensure connectivity by requesting the UID of the first unit

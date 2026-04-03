@@ -162,6 +162,8 @@ class XAPX00(object):
         self.ExpansionChannels = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
         self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
         self._commlock = Lock()
+        self._last_attempt = 0
+        self._retry_interval = 10  # seconds between connection attempts when unit is offline
 #        self.connect(check=True)
 
     def get_serial_port(self):
@@ -194,7 +196,7 @@ class XAPX00(object):
 
     def disconnect(self):
         """Disconnect from serial port"""
-        _LOGGER.info("disconnect called shouldn't be")
+        _LOGGER.info("disconnect called, but it shouldn't be")
         if self.connected:
             self.serial.close()
             self.connected = 0
@@ -205,18 +207,21 @@ class XAPX00(object):
         Returns:
             number of bytes sent
         """
-        
         _LOGGER.info("Old style send called")
         self._commlock.acquire()
-        serialconn = self.get_serial_port()
-        _LOGGER.debug("Sending: %s", data)
-        if not testing:
-            # self.serial.reset_input_buffer()
-            bytessent = serialconn.write(data.encode())
-            serialconn.close()
-            return bytessent
-        else:
-            return len(data)
+        serialconn = None
+        try:
+            serialconn = self.get_serial_port()
+            _LOGGER.debug("Sending: %s", data)
+            if not testing:
+                bytessent = serialconn.write(data.encode())
+                return bytessent
+            else:
+                return len(data)
+        finally:
+            if serialconn is not None:
+                serialconn.close()
+            self._commlock.release()
 
     def readResponse(self, numElements=1, serial_conn=None):
         """Get response from unit.
@@ -255,46 +260,61 @@ class XAPX00(object):
             return respitems[-numElements:]
         
     def XAPCommand(self, command, *args, **kwargs):
-        """Call command and return value"""
-        res = 0
+        """Call command and return value.
+
+        Raises XAPCommError if the unit is unreachable or returns an error.
+        """
         self._commlock.acquire()
-        serialconn = self.get_serial_port()
-
-        unitCode = kwargs.get('unitCode',0)
-        rtnCount = kwargs.get('rtnCount',1)
-        args = [str(x) for x in args]
-
-        xapstr = "%s%s %s %s %s" % ( self.XAPCMD, unitCode, command, " ".join(args),  EOM)
-        _LOGGER.debug("sending command: {}".format(xapstr))
-        serialconn.write(xapstr.encode())
-        # self._waiting_response = 1
+        serialconn = None
         try:
-            res = self.readResponse(numElements = rtnCount, serial_conn=serialconn)
+            serialconn = self.get_serial_port()
+            unitCode = kwargs.get('unitCode', 0)
+            rtnCount = kwargs.get('rtnCount', 1)
+            args = [str(x) for x in args]
+            xapstr = "%s%s %s %s %s" % (self.XAPCMD, unitCode, command, " ".join(args), EOM)
+            _LOGGER.debug("sending command: {}".format(xapstr))
+            serialconn.write(xapstr.encode())
+            res = self.readResponse(numElements=rtnCount, serial_conn=serialconn)
+            self.connectionLive = 1
+            return res
+        except Exception as e:
+            self.connectionLive = 0
+            raise XAPCommError("Command {} failed: {}".format(command, e)) from e
+        finally:
+            if serialconn is not None:
+                serialconn.close()
+            self._commlock.release()
+
+    def test_connection(self):
+        """Return True if connection works, False if not.
+
+        Applies a backoff so repeated calls don't hammer the port while the
+        unit is offline — retries at most once every _retry_interval seconds.
+        """
+        now = time.time()
+        if not self.connectionLive and (now - self._last_attempt) < self._retry_interval:
+            return False
+        self._last_attempt = now
+
+        self._commlock.acquire()
+        serialconn = None
+        try:
+            serialconn = self.get_serial_port()
+            _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
+            serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
+            serialconn.readlines()  # clear response
             self.connectionLive = 1
         except Exception:
             self.connectionLive = 0
         finally:
+            if serialconn is not None:
+                serialconn.close()
             self._commlock.release()
-            serialconn.close()
-        return res
 
-    def test_connection(self):
-        """ return True if connection works, False if not """
-        self._commlock.acquire()
-        serialconn = self.get_serial_port()
-        _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
-                         " baud...")
-        # Ensure connectivity by requesting the UID of the first unit
-        try:
-          serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
-          serialconn.readlines()  # clear response
-          self.connectionLive = 1
-        except Exception:
-          self.connectionLive = 0
-        finally:
-          self._commlock.release()
-        id = self.getUniqueId(0)
-        return isinstance(id,str)
+        if not self.connectionLive:
+            return False
+        uid = self.getUniqueId(0)
+        return isinstance(uid, str)
     
     def reset(self):
         """Reset connection."""

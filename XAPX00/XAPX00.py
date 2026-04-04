@@ -149,7 +149,7 @@ class XAPX00(object):
         self.XAPType      = XAPType
         self.matrixGeo    = matrixGeo[self.XAPType] 
         self.XAPCMD       = XAP800_CMD if XAPType == XAP800TYPE else XAP400_CMD
-        self.connected    = 0
+#        self.connected    = 0 #originally used for a persistent connection, bot used now
         self.connectionLive = 0
         self.input_range  = range(1, 13)
         self.output_range = range(1, 13)
@@ -165,6 +165,8 @@ class XAPX00(object):
         self._last_attempt = 0
         self._retry_interval = 10  # seconds between connection attempts when unit is offline
 #        self.connect(check=True)
+        self._serialconn = None
+        self.get_serial_port()
 
     def get_serial_port(self):
         serialconn = serial.serial_for_url(self.comPort, do_not_open=True)
@@ -174,32 +176,37 @@ class XAPX00(object):
         serialconn.parity = self.parity
         serialconn.timeout = self.timeout
         serialconn.write_timeout = self.timeout
-        serialconn.open()
-        return serialconn
+        # serialconn.open()
+        self._serialconn = serialconn
 
     def connect(self, check=False):
-        """Open serial port and check connection."""
+        """Open serial port and check connection.
+        This method was originally used when a persistent connection was assumed.
+        No longer used."""
         _LOGGER.info("connect called, shouldn't be")
-        if self.connected:
-            return
-        self.serial = self.get_serial_port()
-        if check:
-            _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
-                         " baud...")
-            # Ensure connectivity by requesting the UID of the first unit
-            self.serial.reset_input_buffer()
-            self.serial.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
-            self.serial.readlines(3) #clear response
-            uid = self.getUniqueId(0)
-            _LOGGER.info("Connected, got uniqueID %s", str(uid))
-        self.connected = 1
+        return
+        # if self.connected:
+        #     return
+        # self.serial = self.get_serial_port()
+        # if check:
+        #     _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
+        #                  " baud...")
+        #     # Ensure connectivity by requesting the UID of the first unit
+        #     self.serial.reset_input_buffer()
+        #     self.serial.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
+        #     self.serial.readlines(3) #clear response
+        #     uid = self.getUniqueId(0)
+        #     _LOGGER.info("Connected, got uniqueID %s", str(uid))
+        # self.connected = 1
 
     def disconnect(self):
-        """Disconnect from serial port"""
+        """Disconnect from serial port
+        No longer used"""
         _LOGGER.info("disconnect called, but it shouldn't be")
-        if self.connected:
-            self.serial.close()
-            self.connected = 0
+        return
+        # if self.connected:
+        #     self.serial.close()
+        #     self.connected = 0
 
     def send(self, data):
         """Send the specified data string to the XAP800
@@ -208,22 +215,22 @@ class XAPX00(object):
             number of bytes sent
         """
         _LOGGER.info("Old style send called")
-        self._commlock.acquire()
-        serialconn = None
-        try:
-            serialconn = self.get_serial_port()
-            _LOGGER.debug("Sending: %s", data)
-            if not testing:
-                bytessent = serialconn.write(data.encode())
-                return bytessent
-            else:
-                return len(data)
-        finally:
-            if serialconn is not None:
-                serialconn.close()
-            self._commlock.release()
+        return
+        # self._commlock.acquire()
+        # try:
+        #     self._serialconn.open() # = self.get_serial_port()
+        #     _LOGGER.debug("Sending: %s", data)
+        #     if not testing:
+        #         bytessent = self._serialconn.write(data.encode())
+        #         return bytessent
+        #     else:
+        #         return len(data)
+        # finally:
+        #     if self._serialconn is not None:
+        #         self._serialconn.close()
+        #     self._commlock.release()
 
-    def readResponse(self, numElements=1, serial_conn=None):
+    def readResponse(self, numElements=1): #, serial_conn=None):
         """Get response from unit.
 
         Args:
@@ -233,14 +240,9 @@ class XAPX00(object):
         Returns:
             response string from unit
         """
-        if serial_conn is None:
-            serialconn = self.get_serial_port()
-            self._commlock.acquire()
-        else:
-            serialconn = serial_conn
 
         while 1:
-            resp = serialconn.readline().decode()
+            resp = self._serialconn.readline().decode()
             if len(resp) > 5 and resp[0:5] == "ERROR":
                 self._waiting_response = 0
                 raise XAPRespError(resp)
@@ -250,9 +252,6 @@ class XAPX00(object):
             if resp == '':
                 # nothing coming, have read too many lines
                 return None
-        if serial_conn is None:
-            serialconn.close()
-            self._commlock.release()
         respitems = resp.split("#",maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
@@ -265,24 +264,26 @@ class XAPX00(object):
         Raises XAPCommError if the unit is unreachable or returns an error.
         """
         self._commlock.acquire()
-        serialconn = None
+ #       serialconn = None
         try:
-            serialconn = self.get_serial_port()
+            self._serialconn.open()
             unitCode = kwargs.get('unitCode', 0)
             rtnCount = kwargs.get('rtnCount', 1)
             args = [str(x) for x in args]
             xapstr = "%s%s %s %s %s" % (self.XAPCMD, unitCode, command, " ".join(args), EOM)
             _LOGGER.debug("sending command: {}".format(xapstr))
-            serialconn.write(xapstr.encode())
-            res = self.readResponse(numElements=rtnCount, serial_conn=serialconn)
+            self._serialconn.write(xapstr.encode())
+            res = self.readResponse(numElements=rtnCount) #, serial_conn=serialconn)
             self.connectionLive = 1
             return res
+        except XAPRespError as e:
+            raise
         except Exception as e:
             self.connectionLive = 0
             raise XAPCommError("Command {} failed: {}".format(command, e)) from e
         finally:
-            if serialconn is not None:
-                serialconn.close()
+            if self._serialconn is not None:
+                self._serialconn.close()
             self._commlock.release()
 
     def test_connection(self):
@@ -297,29 +298,29 @@ class XAPX00(object):
         self._last_attempt = now
 
         self._commlock.acquire()
-        serialconn = None
+#        serialconn = None
         try:
-            serialconn = self.get_serial_port()
+#            serialconn = self.get_serial_port()
             _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
-            serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
-            serialconn.readlines()  # clear response
+            self._serialconn.open()
+            self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
+            self._serialconn.readlines()  # clear response
             self.connectionLive = 1
         except Exception:
             self.connectionLive = 0
+            return False
         finally:
-            if serialconn is not None:
-                serialconn.close()
+            if self._serialconn is not None:
+                self._serialconn.close()
             self._commlock.release()
 
-        if not self.connectionLive:
-            return False
         uid = self.getUniqueId(0)
         return isinstance(uid, str)
     
     def reset(self):
         """Reset connection."""
         warnings.warn("Clearing Serial Connection")
-        self.serial.reset_input_buffer()
+        self._serialconn.reset_input_buffer()
 
     def getUniqueId(self, unitCode=0):
         """Requests the unique ID of the target XAP800.
@@ -398,7 +399,8 @@ class XAPX00(object):
         resp = self.XAPCommand("MAX", channel, group, unitCode=unitCode)
         if is_number(resp):
             return float(resp)
-        else: raise XAPCommError
+        else: 
+            raise XAPCommError
 
     @stereo
     def setMaxGain(self, channel, gain, group="I", unitCode=0):

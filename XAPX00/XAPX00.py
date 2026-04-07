@@ -23,7 +23,6 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-__version__ = '0.3.1b1'
 
 import serial
 import logging
@@ -122,7 +121,6 @@ def linear2db(gain, maxref=0):
     """
     dbdiff = 20.0 * math.log10(float(gain) + 0.000001)
     return min(max(maxref + dbdiff, -99), 99)
-
 
 class XAPCommError(Exception):
     """ Communications Error """

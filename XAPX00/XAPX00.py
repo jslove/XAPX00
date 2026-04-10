@@ -308,7 +308,7 @@ class XAPX00(object):
             written = self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
             _LOGGER.debug('written=%s' % written)
             if written < 1:
-                raise serial.SerialException('0 written')                
+                raise XAPCommError('0 written')                
             self._serialconn.readlines()  # clear response
             _LOGGER.debug("past readlines...")
             self.connectionLive = 1
@@ -318,7 +318,7 @@ class XAPX00(object):
 #            self._serialconn.readlines()  # clear response
             _LOGGER.debug('connected')
             return True #isinstance(uid, str)
-        except (serial.SerialException, serial.SerialTimeoutException) as e:
+        except (XAPCommError, serial.SerialException, serial.SerialTimeoutException) as e:
             _LOGGER.debug('test_connection: %s' % e)
             self.connectionLive = 0
             return False

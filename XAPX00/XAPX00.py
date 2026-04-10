@@ -103,7 +103,10 @@ def stereo(func):
 
 def is_number(s):
     """ Returns True if string is a number. """
-    return s.replace('.','',1).replace('-','',1).isdigit()
+    if isinstance(s,str):
+        return s.replace('.','',1).replace('-','',1).isdigit()
+    else:
+        return False
 
 def db2linear(db, maxref=0):
     """Convert a db level to a linear level of 0-1.
@@ -162,9 +165,9 @@ class XAPX00(object):
         self._commlock = Lock()
         self._last_attempt = 0
         self._retry_interval = 10  # seconds between connection attempts when unit is offline
-#        self.connect(check=True)
         self._serialconn = None
         self.get_serial_port()
+        self.test_connection()
 
     def get_serial_port(self):
         serialconn = serial.serial_for_url(self.comPort, do_not_open=True)
@@ -174,7 +177,6 @@ class XAPX00(object):
         serialconn.parity = self.parity
         serialconn.timeout = self.timeout
         serialconn.write_timeout = self.timeout
-        # serialconn.open()
         self._serialconn = serialconn
 
     def connect(self, check=False):
@@ -276,7 +278,7 @@ class XAPX00(object):
             return res
         except XAPRespError as e:
             raise
-        except Exception as e:
+        except serial.SerialException as e:
             self.connectionLive = 0
             raise XAPCommError("Command {} failed: {}".format(command, e)) from e
         finally:
@@ -304,6 +306,8 @@ class XAPX00(object):
             self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
             self._serialconn.readlines()  # clear response
             self.connectionLive = 1
+            uid = self.getUniqueId(0)
+            return isinstance(uid, str)
         except Exception:
             self.connectionLive = 0
             return False
@@ -311,9 +315,6 @@ class XAPX00(object):
             if self._serialconn is not None:
                 self._serialconn.close()
             self._commlock.release()
-
-        uid = self.getUniqueId(0)
-        return isinstance(uid, str)
     
     def reset(self):
         """Reset connection."""

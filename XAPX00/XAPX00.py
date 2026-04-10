@@ -302,12 +302,17 @@ class XAPX00(object):
 #        serialconn = None
         try:
 #            serialconn = self.get_serial_port()
-            _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
+            _LOGGER.debug("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
             self._serialconn.open()
+            _LOGGER.debug("connection open writing ....")
             self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
             self._serialconn.readlines()  # clear response
+            _LOGGER.debug("past readlines...")
             self.connectionLive = 1
-            uid = self.getUniqueId(0)
+#            _LOGGER.debug("getUniqueID....")
+#            uid = self.getUniqueId(0)
+#            self._serialconn.write(("%s0 UID 1 %s" % (self.XAPCMD, EOM)).encode())
+#            self._serialconn.readlines()  # clear response
             _LOGGER.debug('connected')
             return isinstance(uid, str)
         except serial.SerialException as e:

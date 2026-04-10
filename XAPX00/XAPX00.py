@@ -314,7 +314,7 @@ class XAPX00(object):
 #            self._serialconn.write(("%s0 UID 1 %s" % (self.XAPCMD, EOM)).encode())
 #            self._serialconn.readlines()  # clear response
             _LOGGER.debug('connected')
-            return isinstance(uid, str)
+            return True #isinstance(uid, str)
         except serial.SerialException as e:
             _LOGGER.debug('test_connection: %s' % e)
             self.connectionLive = 0

@@ -35,6 +35,7 @@ from functools import wraps
 
 testing = 0
 
+from . import __version__
 
 _LOGGER = logging.getLogger(__name__)
 if 0:
@@ -139,7 +140,7 @@ class XAPX00(object):
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
                  stereo=0, XAPType=XAP800TYPE):
         """init: no parameters required."""
-        _LOGGER.info("XAPX00 version: {}".format(sys.modules[self.__class__.__module__].__version__))
+        _LOGGER.info("XAPX00 version: {}".format(__version__))
         self.comPort      = comPort
         self.baudRate     = baudRate
         self.byteLength   = serial.EIGHTBITS

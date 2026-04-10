@@ -308,15 +308,18 @@ class XAPX00(object):
             written = self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
             _LOGGER.debug('written=%s' % written)
             if written < 1:
-                raise XAPCommError('0 written')                
-            self._serialconn.readlines()  # clear response
-            _LOGGER.debug("past readlines...")
-            self.connectionLive = 1
-#            _LOGGER.debug("getUniqueID....")
-#            uid = self.getUniqueId(0)
-#            self._serialconn.write(("%s0 UID 1 %s" % (self.XAPCMD, EOM)).encode())
-#            self._serialconn.readlines()  # clear response
-            _LOGGER.debug('connected')
+                raise XAPCommError('test_connection: 0 written')                
+            resp = self._serialconn.readline().decode()
+            _LOGGER.debug('test_connection response: %s' % resp)
+            if len(resp) > 5:
+                if resp[0:5] == "ERROR":
+                    raise XAPRespError(resp)
+                else:
+                    self.connectionLive = 1
+                    _LOGGER.debug('connected')
+            else:
+                    self.connectionLive = 0
+                    raise XAPCommError('resp < 5: %s' % resp)                
             return True #isinstance(uid, str)
         except (XAPCommError, serial.SerialException, serial.SerialTimeoutException) as e:
             _LOGGER.debug('test_connection: %s' % e)

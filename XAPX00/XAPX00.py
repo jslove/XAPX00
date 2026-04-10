@@ -278,7 +278,7 @@ class XAPX00(object):
             return res
         except XAPRespError as e:
             raise
-        except serial.SerialException as e:
+        except (serial.SerialException, serial.SerialTimeoutException as e:
             self.connectionLive = 0
             raise XAPCommError("Command {} failed: {}".format(command, e)) from e
         finally:
@@ -305,7 +305,10 @@ class XAPX00(object):
             _LOGGER.debug("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
             self._serialconn.open()
             _LOGGER.debug("connection open writing ....")
-            self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
+            written = self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
+            _LOGGER.debug('written=%s' % written)
+            if written < 1:
+                raise serial.SerialException('0 written')                
             self._serialconn.readlines()  # clear response
             _LOGGER.debug("past readlines...")
             self.connectionLive = 1
@@ -315,7 +318,7 @@ class XAPX00(object):
 #            self._serialconn.readlines()  # clear response
             _LOGGER.debug('connected')
             return True #isinstance(uid, str)
-        except serial.SerialException as e:
+        except (serial.SerialException, serial.SerialTimeoutException) as e:
             _LOGGER.debug('test_connection: %s' % e)
             self.connectionLive = 0
             return False

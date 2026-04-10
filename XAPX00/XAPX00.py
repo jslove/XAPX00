@@ -169,8 +169,10 @@ class XAPX00(object):
         self._serialconn = None
         self.get_serial_port()
         self.test_connection()
+        _LOGGER.debug("XAPX00 __init__ complete")
 
     def get_serial_port(self):
+        _LOGGER.debug("XAPX00.get_serial_port")
         serialconn = serial.serial_for_url(self.comPort, do_not_open=True)
         serialconn.baudrate = self.baudRate
         serialconn.stopbits = self.stopBits
@@ -293,6 +295,7 @@ class XAPX00(object):
         Applies a backoff so repeated calls don't hammer the port while the
         unit is offline — retries at most once every _retry_interval seconds.
         """
+        _LOGGER.debug('test_connection')
         now = time.time()
         if not self.connectionLive and (now - self._last_attempt) < self._retry_interval:
             return False
@@ -308,8 +311,10 @@ class XAPX00(object):
             self._serialconn.readlines()  # clear response
             self.connectionLive = 1
             uid = self.getUniqueId(0)
+            _LOGGER.debug('connected')
             return isinstance(uid, str)
-        except Exception:
+        except serial.SerialException as e:
+            _LOGGER.debug('test_connection: %s' % e)
             self.connectionLive = 0
             return False
         finally:

@@ -173,13 +173,10 @@ class XAPX00(object):
 
     def get_serial_port(self):
         _LOGGER.debug("XAPX00.get_serial_port")
-        serialconn = serial.serial_for_url(self.comPort, do_not_open=True)
-        serialconn.baudrate = self.baudRate
-        serialconn.stopbits = self.stopBits
-        serialconn.bytesize = self.byteLength
-        serialconn.parity = self.parity
-        serialconn.timeout = self.timeout
-        serialconn.write_timeout = self.timeout
+        serialconn = serial.serial_for_url(self.comPort, timeout=self.timeout, 
+                                           baudrate=self.baudRate,
+                                           write_timeout=self.timeout,
+                                           do_not_open=True)
         self._serialconn = serialconn
 
     def connect(self, check=False):

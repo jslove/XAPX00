@@ -278,7 +278,7 @@ class XAPX00(object):
             return res
         except XAPRespError as e:
             raise
-        except (serial.SerialException, serial.SerialTimeoutException as e:
+        except (serial.SerialException, serial.SerialTimeoutException) as e:
             self.connectionLive = 0
             raise XAPCommError("Command {} failed: {}".format(command, e)) from e
         finally:

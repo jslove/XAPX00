@@ -23,7 +23,7 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-
+import sys
 import serial
 import logging
 import math
@@ -139,7 +139,7 @@ class XAPX00(object):
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
                  stereo=0, XAPType=XAP800TYPE):
         """init: no parameters required."""
-        _LOGGER.info("XAPX00 version: {}".format(__version__))
+        _LOGGER.info("XAPX00 version: {}".format(sys.modules[self.__module__].__version__))
         self.comPort      = comPort
         self.baudRate     = baudRate
         self.byteLength   = serial.EIGHTBITS

@@ -299,30 +299,30 @@ class XAPX00(object):
         self._last_attempt = now
 
         self._commlock.acquire()
-#        serialconn = None
         try:
-#            serialconn = self.get_serial_port()
             _LOGGER.debug("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
             self._serialconn.open()
-            _LOGGER.debug("connection open writing ....")
-            written = self._serialconn.write(("%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)).encode())
-            _LOGGER.debug('written=%s' % written)
-            if written < 1:
-                raise XAPCommError('test_connection: 0 written')                
+            _LOGGER.debug("serialconn open, writing ....")
+            str_to_write= "%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)
+            _LOGGER.debug("writing: %s" % str_to_write)
+            bytes_written = self._serialconn.write(str_to_write.encode())
+            _LOGGER.debug('bytes written=%s' % bytes_written)
+            if bytes_written < 1:
+                raise XAPCommError('XAPCommError - test_connection: %s written' % bytes_written)                
             resp = self._serialconn.readline().decode()
             _LOGGER.debug('test_connection response: %s' % resp)
             if len(resp) > 5:
                 if resp[0:5] == "ERROR":
-                    raise XAPRespError(resp)
-                else:
+                    raise XAPRespError("XAPRespError - response %s:" % resp)
+                else:  #response should be "[DEVICE] SERECHO 1"
                     self.connectionLive = 1
                     _LOGGER.debug('connected')
-            else:
+            else:  #response less than 5, should be "[DEVICE] SERECHO 1"
                     self.connectionLive = 0
-                    raise XAPCommError('resp < 5: %s' % resp)                
+                    raise XAPCommError('XAPCommError - resp < 5: %s' % resp)
             return True #isinstance(uid, str)
         except (XAPCommError, serial.SerialException, serial.SerialTimeoutException) as e:
-            _LOGGER.debug('test_connection: %s' % e)
+            _LOGGER.debug('Exception in test_connection: %s\n setting conectionLive=False' % e)
             self.connectionLive = 0
             return False
         finally:

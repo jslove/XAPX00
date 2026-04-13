@@ -160,7 +160,6 @@ class XAPX00(object):
         self._maxtime     = 60 * 60 * 1  # 1 hour
         self._maxrespdelay = 5
         self._sleeptime   = 0.25
-        self._waiting_response = 0
         self.ExpansionChannels = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
         self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
         self._commlock = Lock()
@@ -244,7 +243,6 @@ class XAPX00(object):
         while 1:
             resp = self._serialconn.readline().decode()
             if len(resp) > 5 and resp[0:5] == "ERROR":
-                self._waiting_response = 0
                 raise XAPRespError(resp)
             _LOGGER.debug("Response %s" % resp)
             if resp.find('#') > -1:
@@ -301,23 +299,22 @@ class XAPX00(object):
         self._commlock.acquire()
         try:
             _LOGGER.debug("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
-            self._serialconn.open()
-            _LOGGER.debug("serialconn open, writing ....")
-            str_to_write= "%s0 SERECHO 1 %s" % (self.XAPCMD, EOM)
+            self._serialconn.open() #will get an exception here if device not present / invalid path
+            _LOGGER.debug('commport opened: %s' % self.comPort)
+            str_to_write= "%s0 UID %s" % (self.XAPCMD, EOM)
             _LOGGER.debug("writing: %s" % str_to_write)
             bytes_written = self._serialconn.write(str_to_write.encode())
-            _LOGGER.debug('bytes written=%s' % bytes_written)
             if bytes_written < 1:
                 raise XAPCommError('XAPCommError - test_connection: %s written' % bytes_written)                
-            resp = self._serialconn.readline().decode()
+            resp = self.readResponse()
             _LOGGER.debug('test_connection response: %s' % resp)
             if len(resp) > 5:
                 if resp[0:5] == "ERROR":
                     raise XAPRespError("XAPRespError - response %s:" % resp)
-                else:  #response should be "[DEVICE] SERECHO 1"
+                else:  #response should be 8 characters
                     self.connectionLive = 1
                     _LOGGER.debug('connected')
-            else:  #response less than 5, should be "[DEVICE] SERECHO 1"
+            else:  #response less than 5, should be 8 chars
                     self.connectionLive = 0
                     raise XAPCommError('XAPCommError - resp < 5: %s' % resp)
             return True #isinstance(uid, str)
@@ -343,6 +340,12 @@ class XAPX00(object):
         unitCode - the unit code of the target XAP800
         """
         res = self.XAPCommand("UID", unitCode=unitCode)
+        return res
+    
+    def getVersion(self, unitCode=0):
+        """Requests the hardware version of the target XAP.
+        """
+        res = self.XAPCommand("VER", unitCode=unitCode)
         return res
     
     @stereo

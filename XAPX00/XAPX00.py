@@ -462,7 +462,8 @@ class XAPX00(object):
                 if self.connection_type == 'telnet':
                     continue  # blank lines are normal on telnet; timeout handles no-response
                 else:
-                    return None  # serial empty read means no data coming
+                    raise XAPCommError('No Response')
+#                    return None  # serial empty read means no data coming
         respitems = resp.split("#", maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
@@ -525,9 +526,10 @@ class XAPX00(object):
                 raise XAPCommError('XAPCommError - test_connection: %s written' % bytes_written)                
             resp = self.readResponse()
             _LOGGER.debug('test_connection response: %s' % resp)
-            self.connectionLive = 1
-            _LOGGER.debug('connected, UID: %s' % resp)
-            return True #isinstance(uid, str)
+            if resp is not None or '':
+                self.connectionLive = 1
+                _LOGGER.debug('connected, UID: %s' % resp)
+                return True #isinstance(uid, str)
         except (XAPCommError, OSError, TimeoutError, asyncio.TimeoutError) as e:
             _LOGGER.debug('Exception in test_connection: %s\n setting conectionLive=False' % e)
             self.connectionLive = 0

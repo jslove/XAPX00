@@ -526,7 +526,7 @@ class XAPX00(object):
                 raise XAPCommError('XAPCommError - test_connection: %s written' % bytes_written)                
             resp = self.readResponse()
             _LOGGER.debug('test_connection response: %s' % resp)
-            if resp is not None or '':
+            if resp not in (None, ''):
                 self.connectionLive = 1
                 _LOGGER.debug('connected, UID: %s' % resp)
                 return True #isinstance(uid, str)

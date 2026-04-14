@@ -24,7 +24,13 @@ Matrix Routing:
 """
 
 import sys
-import serial
+import asyncio
+try:
+    import serial
+    _SERIAL_AVAILABLE = True
+except ImportError:
+    serial = None
+    _SERIAL_AVAILABLE = False
 import logging
 import math
 import time
@@ -32,6 +38,12 @@ import warnings
 import string
 from threading import Lock
 from functools import wraps
+
+try:
+    import telnetlib3
+    _TELNETLIB3_AVAILABLE = True
+except ImportError:
+    _TELNETLIB3_AVAILABLE = False
 
 testing = 0
 
@@ -49,11 +61,17 @@ if 0:
 # Global Constants
 XAP800_CMD = "#5"
 XAP400_CMD = "#7"
+CP880_CMD = "#1"
+CP880T_CMD = "#D"
+CP880TA_CMD = '#H'
 XAP800TYPE = "XAP800"
 XAP400TYPE = "XAP400"
+CP880TYPE = "CP880"
+CP880TTYPE = "CP880T"
+CP880TATYPE = "CP880A"
 EOM = "\r"
 DEVICE_MAXMICS = "Max Number of Microphones"
-matrixGeo = {'XAP800': 12, 'XAP400': 8}
+matrixGeo = {'XAP800': 12, 'XAP400': 8, 'CP880':12, 'CP880T':12, 'CP880TA':12}
 nogainGroups = ('E')
 
 def stereo(func):
@@ -134,24 +152,181 @@ class XAPRespError(Exception):
     """ XAP Responded With Error """
     pass
 
+
+class TelnetConnection:
+    """Synchronous wrapper around telnetlib3 that mimics the pyserial interface.
+
+    Exposes open(), close(), write(), readline(), and reset_input_buffer()
+    so it can be used as a drop-in replacement for the pyserial object used
+    by XAPX00.  The underlying TCP connection is kept persistent — open() is
+    a no-op when already connected, and close() is likewise a no-op.  Call
+    disconnect() to tear down the connection explicitly.
+    """
+
+    def __init__(self, host, port=23, timeout=5, username=None, password=None):
+        if not _TELNETLIB3_AVAILABLE:
+            raise ImportError(
+                "telnetlib3 is required for telnet connections. "
+                "Install it with: pip install telnetlib3"
+            )
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.username = username
+        self.password = password
+        self._reader = None
+        self._writer = None
+        self._loop = asyncio.new_event_loop()
+
+    # ------------------------------------------------------------------
+    # Internal async helpers
+    # ------------------------------------------------------------------
+
+    def _run(self, coro):
+        return self._loop.run_until_complete(coro)
+
+    async def _async_read_until(self, prompt):
+        """Read characters until the given prompt string is found."""
+        buf = ''
+        while True:
+            ch = await asyncio.wait_for(self._reader.read(1), timeout=self.timeout)
+            if not ch:
+                break
+            buf += ch
+            if buf.endswith(prompt):
+                break
+        return buf
+
+    async def _async_connect(self):
+        reader, writer = await asyncio.wait_for(
+            telnetlib3.open_connection(self.host, self.port),
+            timeout=self.timeout,
+        )
+        self._reader = reader
+        self._writer = writer
+
+        if self.username is not None:
+            _LOGGER.debug("telnet: waiting for login prompt")
+            prompt = await self._async_read_until('ser: ')
+            _LOGGER.debug("telnet: got login prompt: %r", prompt)
+            writer.write(self.username + '\r')
+            _LOGGER.debug("telnet: sent username, waiting for password prompt")
+            prompt = await self._async_read_until('pass: ')
+            _LOGGER.debug("telnet: got password prompt: %r", prompt)
+            writer.write((self.password or '') + '\r')
+            _LOGGER.debug("telnet: sent password, consuming banner")
+            await asyncio.sleep(0.5)
+            banner = await asyncio.wait_for(self._reader.read(4096), timeout=1)
+            _LOGGER.debug("telnet: post-login banner: %r", banner)
+
+    async def _async_readline(self):
+        """Read until \\r (XAP EOM), since the device doesn't send \\n.
+
+        Returns the line as a string (without the \\r), or None on EOF.
+        """
+        async def read_until_cr():
+            buf = []
+            while True:
+                ch = await self._reader.read(1)
+                if not ch:      # EOF
+                    return None
+                if ch == '\r':
+                    break
+                if ch != '\n':  # skip bare \n (telnet may send \r\n)
+                    buf.append(ch)
+            return ''.join(buf)
+
+        return await asyncio.wait_for(read_until_cr(), timeout=self.timeout)
+
+    async def _async_drain(self):
+        await self._writer.drain()
+
+    async def _async_drain_input(self):
+        try:
+            await asyncio.wait_for(self._reader.read(4096), timeout=0.1)
+        except asyncio.TimeoutError:
+            pass
+
+    # ------------------------------------------------------------------
+    # pyserial-compatible interface
+    # ------------------------------------------------------------------
+
+    def open(self):
+        """Connect if not already connected."""
+        if self._writer is not None:
+            return
+        self._run(self._async_connect())
+
+    def close(self):
+        """No-op — the telnet connection is kept persistent between commands.
+
+        Call disconnect() to actually tear down the connection.
+        """
+        pass
+
+    def disconnect(self):
+        """Tear down the telnet connection."""
+        if self._writer is not None:
+            self._writer.close()
+            self._reader = None
+            self._writer = None
+
+    def write(self, data: bytes) -> int:
+        """Send bytes to the device (decoded to str for telnetlib3)."""
+        text = data.decode()
+        self._writer.write(text)
+        self._run(self._async_drain())
+        return len(data)
+
+    def readline(self) -> bytes:
+        """Read one line from the device and return it as bytes."""
+        line = self._run(self._async_readline())
+        if line is None:
+            return b''
+        if isinstance(line, str):
+            return line.encode()
+        return line
+
+    def reset_input_buffer(self):
+        """Drain any buffered input from the device."""
+        self._run(self._async_drain_input())
+
 class XAPX00(object):
     """XAPX000 Module."""
 
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
-                 stereo=0, XAPType=XAP800TYPE):
-        """init: no parameters required."""
+                 stereo=0, XAPType=XAP800TYPE,
+                 connection_type="serial", telnet_host=None, telnet_port=23,
+                 telnet_username="clearone", telnet_password="converge"):
+        """Initialize the XAPX00 controller.
+
+        Args:
+            comPort: Serial port path (used when connection_type="serial").
+            baudRate: Baud rate for serial connection (default 38400).
+            stereo: Enable stereo mode (repeats commands for paired channels).
+            XAPType: Device type — "XAP800", "XAP400", or "CP880".
+            connection_type: Transport to use — "serial" or "telnet".
+            telnet_host: Hostname or IP address (required for connection_type="telnet").
+            telnet_port: Telnet port number (default 23).
+            telnet_username: Telnet login username (default "clearone").
+            telnet_password: Telnet login password (default "converge").
+        """
         _LOGGER.info("XAPX00 version: {}".format(__version__))
-        self.comPort      = comPort
-        self.baudRate     = baudRate
-        self.byteLength   = serial.EIGHTBITS
-        self.stopBits     = serial.STOPBITS_ONE
-        self.parity       = serial.PARITY_NONE
-        self.timeout      = 2
+        self.connection_type = connection_type
         self.stereo       = stereo
         self.XAPType      = XAPType
-        self.matrixGeo    = matrixGeo[self.XAPType] 
-        self.XAPCMD       = XAP800_CMD if XAPType == XAP800TYPE else XAP400_CMD
-#        self.connected    = 0 #originally used for a persistent connection, bot used now
+        self.matrixGeo    = matrixGeo[self.XAPType]
+        if XAPType == XAP800TYPE:
+            self.XAPCMD = XAP800_CMD
+        elif XAPType == CP880TYPE:
+            self.XAPCMD = CP880_CMD
+        elif XAPType == CP880TTYPE:
+            self.XAPCMD = CP880T_CMD
+        elif XAPType == CP880TATYPE:
+            self.XAPCMD = CP880TA_CMD
+        else:
+            self.XAPCMD = XAP400_CMD
+        self.timeout      = 2
         self.connectionLive = 0
         self.input_range  = range(1, 13)
         self.output_range = range(1, 13)
@@ -166,17 +341,47 @@ class XAPX00(object):
         self._last_attempt = 0
         self._retry_interval = 10  # seconds between connection attempts when unit is offline
         self._serialconn = None
-        self.get_serial_port()
+
+        if connection_type == "telnet":
+            if telnet_host is None:
+                raise ValueError("telnet_host is required when connection_type='telnet'")
+            self.telnet_host = telnet_host
+            self.telnet_port = telnet_port
+            self.telnet_username = telnet_username
+            self.telnet_password = telnet_password
+            self.get_telnet_connection()
+        else:
+            if not _SERIAL_AVAILABLE:
+                raise ImportError("pyserial is required for serial connections. Install it with: pip install pyserial")
+            self.comPort      = comPort
+            self.baudRate     = baudRate
+            self.byteLength   = serial.EIGHTBITS
+            self.stopBits     = serial.STOPBITS_ONE
+            self.parity       = serial.PARITY_NONE
+            self.get_serial_port()
+
         self.test_connection()
         _LOGGER.debug("XAPX00 __init__ complete")
 
     def get_serial_port(self):
         _LOGGER.debug("XAPX00.get_serial_port")
-        serialconn = serial.serial_for_url(self.comPort, timeout=self.timeout, 
+        serialconn = serial.serial_for_url(self.comPort, timeout=self.timeout,
                                            baudrate=self.baudRate,
                                            write_timeout=self.timeout,
                                            do_not_open=True)
         self._serialconn = serialconn
+
+    def get_telnet_connection(self):
+        """Create a TelnetConnection and assign it to _serialconn."""
+        _LOGGER.debug("XAPX00.get_telnet_connection host=%s port=%s",
+                      self.telnet_host, self.telnet_port)
+        self._serialconn = TelnetConnection(
+            host=self.telnet_host,
+            port=self.telnet_port,
+            timeout=self.timeout,
+            username=self.telnet_username,
+            password=self.telnet_password,
+        )
 
     def connect(self, check=False):
         """Open serial port and check connection.
@@ -199,10 +404,16 @@ class XAPX00(object):
         # self.connected = 1
 
     def disconnect(self):
-        """Disconnect from serial port
-        No longer used"""
-        _LOGGER.info("disconnect called, but it shouldn't be")
-        return
+        """Disconnect from the device.
+
+        For telnet connections this tears down the TCP connection.
+        For serial connections this is a no-op (serial is opened/closed
+        per-command and never held open persistently).
+        """
+        if self.connection_type == "telnet" and self._serialconn is not None:
+            _LOGGER.info("disconnect: closing telnet connection")
+            self._serialconn.disconnect()
+            self.connectionLive = 0
         # if self.connected:
         #     self.serial.close()
         #     self.connected = 0
@@ -242,15 +453,17 @@ class XAPX00(object):
 
         while 1:
             resp = self._serialconn.readline().decode()
-            if len(resp) > 5 and resp[0:5] == "ERROR":
+            _LOGGER.debug("readResponse raw: %r" % resp)
+            if 'ERROR' in resp:
                 raise XAPRespError(resp)
-            _LOGGER.debug("Response %s" % resp)
+            if resp == '':
+                if self.connection_type == 'telnet':
+                    continue  # blank lines are normal on telnet; timeout handles no-response
+                else:
+                    return None  # serial empty read means no data coming
             if resp.find('#') > -1:
                 break
-            if resp == '':
-                # nothing coming, have read too many lines
-                return None
-        respitems = resp.split("#",maxsplit=1)[1].split()
+        respitems = resp.split("#", maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
         else:
@@ -276,7 +489,7 @@ class XAPX00(object):
             return res
         except XAPRespError as e:
             raise
-        except (serial.SerialException, serial.SerialTimeoutException) as e:
+        except (OSError, TimeoutError, asyncio.TimeoutError) as e:
             self.connectionLive = 0
             raise XAPCommError("Command {} failed: {}".format(command, e)) from e
         finally:
@@ -298,9 +511,13 @@ class XAPX00(object):
 
         self._commlock.acquire()
         try:
-            _LOGGER.debug("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
+            if hasattr(self, 'baudRate'):
+                _LOGGER.debug("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
+            else:
+                _LOGGER.debug("Connecting to XAPX00 via telnet %s:%s...", self.telnet_host, self.telnet_port)
             self._serialconn.open() #will get an exception here if device not present / invalid path
-            _LOGGER.debug('commport opened: %s' % self.comPort)
+            if hasattr(self, 'comPort'):
+                _LOGGER.debug('commport opened: %s' % self.comPort)
             str_to_write= "%s0 UID %s" % (self.XAPCMD, EOM)
             _LOGGER.debug("writing: %s" % str_to_write)
             bytes_written = self._serialconn.write(str_to_write.encode())
@@ -308,17 +525,10 @@ class XAPX00(object):
                 raise XAPCommError('XAPCommError - test_connection: %s written' % bytes_written)                
             resp = self.readResponse()
             _LOGGER.debug('test_connection response: %s' % resp)
-            if len(resp) > 5:
-                if resp[0:5] == "ERROR":
-                    raise XAPRespError("XAPRespError - response %s:" % resp)
-                else:  #response should be 8 characters
-                    self.connectionLive = 1
-                    _LOGGER.debug('connected')
-            else:  #response less than 5, should be 8 chars
-                    self.connectionLive = 0
-                    raise XAPCommError('XAPCommError - resp < 5: %s' % resp)
+            self.connectionLive = 1
+            _LOGGER.debug('connected, UID: %s' % resp)
             return True #isinstance(uid, str)
-        except (XAPCommError, serial.SerialException, serial.SerialTimeoutException) as e:
+        except (XAPCommError, OSError, TimeoutError, asyncio.TimeoutError) as e:
             _LOGGER.debug('Exception in test_connection: %s\n setting conectionLive=False' % e)
             self.connectionLive = 0
             return False

@@ -456,13 +456,13 @@ class XAPX00(object):
             _LOGGER.debug("readResponse raw: %r" % resp)
             if 'ERROR' in resp:
                 raise XAPRespError(resp)
+            if resp.find('#') > -1:
+                break
             if resp == '':
                 if self.connection_type == 'telnet':
                     continue  # blank lines are normal on telnet; timeout handles no-response
                 else:
                     return None  # serial empty read means no data coming
-            if resp.find('#') > -1:
-                break
         respitems = resp.split("#", maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]

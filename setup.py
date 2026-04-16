@@ -19,8 +19,8 @@ def read(fname):
 # and be sure to test it firstly using "python setup.py register sdist upload -r pypitest"
 
 setup(name='XAPX00',
-      version='2026.04.07',
-      description='Control an XAP800/XAP400 unit',
+      version='2026.04.16',
+      description='Control a ClearOne Converge Pro / XAP800/XAP400 unit',
       long_description=read('README.md'),
       install_requires=['pyserial>=3.3', 'telnetlib3'],
       license='GNU',

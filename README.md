@@ -1,7 +1,7 @@
 # XAPX00
-Python Module to control ClearOne Genter XAP 400/800 Audio Conferencing System
+Python Module to control ClearOne Converge Pro v1 or XAP 400/800 Audio Conferencing System
 
-This module facilitates control of a XAP system connected to a serial port (probably through a USB connection.)
+This module facilitates control of a CleanOne system connected to a telnet or serial port.
 
 This code is adapted from a javascript library written by Dan Rudman.
 
@@ -20,8 +20,9 @@ xap.getUniqueID() #or whatever
 
 The XAP unit(s) can be completely configured through this module, with a few small exceptions such as setting the unit#.   However, it may be easiest to do initial configuration with the ClearOne G-Ware application.  There are a lot of nuanced settings that could be missed otherwise.
 
-Since the XAP unit connects via a serial port, you will want to make sure that your usb to serial connection is always in the same place.  The linux udev system offers a way to create a rule so that a device is given a peristent name.  This blog entry offers a good summary:
+Using a network connection (natively on Converge or by a serial adaptre on XAP) is the easiest way to connect.  If a direct serial connection is used, you will want to make sure that your usb to serial connection is always in the same place.  The linux udev system offers a way to create a rule so that a device is given a peristent name.  This blog entry offers a good summary:
 http://rolfblijleven.blogspot.nl/2015/02/howto-persistent-device-names-on.html
+
 
 
 

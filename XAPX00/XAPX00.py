@@ -341,6 +341,7 @@ class XAPX00(object):
         self._last_attempt = 0
         self._retry_interval = 10  # seconds between connection attempts when unit is offline
         self._serialconn = None
+        self.UID = None
 
         if connection_type == "telnet":
             if telnet_host is None:
@@ -529,6 +530,8 @@ class XAPX00(object):
             if resp not in (None, ''):
                 self.connectionLive = 1
                 _LOGGER.debug('connected, UID: %s' % resp)
+                if self.UID is None:
+                    self.UID = resp
                 return True #isinstance(uid, str)
         except (XAPCommError, OSError, TimeoutError, asyncio.TimeoutError) as e:
             _LOGGER.debug('Exception in test_connection: %s\n setting conectionLive=False' % e)

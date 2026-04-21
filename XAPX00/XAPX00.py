@@ -451,7 +451,7 @@ class XAPX00(object):
         Returns:
             response string from unit
         """
-
+        blank = 0
         while 1:
             resp = self._serialconn.readline().decode()
             _LOGGER.debug("readResponse raw: %r" % resp)
@@ -461,7 +461,11 @@ class XAPX00(object):
                 break
             if resp == '':
                 if self.connection_type == 'telnet':
-                    continue  # blank lines are normal on telnet; timeout handles no-response
+                    blank +=1
+                    if blank >2:
+                        raise XAPCommError('No Response')
+                    else:
+                        continue  # blank lines are normal on telnet; timeout handles no-response
                 else:
                     raise XAPCommError('No Response')
 #                    return None  # serial empty read means no data coming

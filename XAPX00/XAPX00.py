@@ -257,6 +257,11 @@ class TelnetConnection:
             return
         self._run(self._async_connect())
 
+    def reconnect(self):
+        """Tear down any existing connection and re-establish it (with login)."""
+        self.disconnect()
+        self._run(self._async_connect())
+
     def close(self):
         """No-op — the telnet connection is kept persistent between commands.
 
@@ -490,7 +495,16 @@ class XAPX00(object):
             xapstr = "%s%s %s %s %s" % (self.XAPCMD, unitCode, command, " ".join(args), EOM)
             _LOGGER.debug("sending command: {}".format(xapstr))
             self._serialconn.write(xapstr.encode())
-            res = self.readResponse(numElements=rtnCount) #, serial_conn=serialconn)
+            try:
+                res = self.readResponse(numElements=rtnCount)
+            except XAPCommError:
+                if self.connection_type == 'telnet':
+                    _LOGGER.warning("No response on telnet; reconnecting and retrying %s", command)
+                    self._serialconn.reconnect()
+                    self._serialconn.write(xapstr.encode())
+                    res = self.readResponse(numElements=rtnCount)
+                else:
+                    raise
             self.connectionLive = 1
             return res
         except XAPRespError as e:

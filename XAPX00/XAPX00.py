@@ -23,29 +23,26 @@ Matrix Routing:
   Is matrix retained after poweroff? Add ability to clear by default?
 """
 
-import sys
 import asyncio
-try:
-    import serial
-    _SERIAL_AVAILABLE = True
-except ImportError:
-    serial = None
-    _SERIAL_AVAILABLE = False
 import logging
 import math
 import time
 import warnings
 import string
-from threading import Lock
 from functools import wraps
+
+try:
+    import serialx
+    _SERIALX_AVAILABLE = True
+except ImportError:
+    serialx = None
+    _SERIALX_AVAILABLE = False
 
 try:
     import telnetlib3
     _TELNETLIB3_AVAILABLE = True
 except ImportError:
     _TELNETLIB3_AVAILABLE = False
-
-testing = 0
 
 from . import __version__
 
@@ -59,61 +56,47 @@ if 0:
     _LOGGER.setLevel(logging.DEBUG)
 
 # Global Constants
-XAP800_CMD = "#5"
-XAP400_CMD = "#7"
-CP880_CMD = "#1"
-CP880T_CMD = "#D"
-CP880TA_CMD = '#H'
-XAP800TYPE = "XAP800"
-XAP400TYPE = "XAP400"
-CP880TYPE = "CP880"
-CP880TTYPE = "CP880T"
+XAP800_CMD  = "#5"
+XAP400_CMD  = "#7"
+CP880_CMD   = "#1"
+CP880T_CMD  = "#D"
+CP880TA_CMD = "#H"
+XAP800TYPE  = "XAP800"
+XAP400TYPE  = "XAP400"
+CP880TYPE   = "CP880"
+CP880TTYPE  = "CP880T"
 CP880TATYPE = "CP880TA"
 EOM = "\r"
 DEVICE_MAXMICS = "Max Number of Microphones"
-matrixGeo = {'XAP800': 12, 'XAP400': 8, 'CP880':12, 'CP880T':12, 'CP880TA':12}
-nogainGroups = ('E')
+matrixGeo = {'XAP800': 12, 'XAP400': 8, 'CP880': 12, 'CP880T': 12, 'CP880TA': 12}
+nogainGroups = ('E',)
+
 
 def stereo(func):
-    """
-    Call as stereo.
-
-    This will take every method that starts with get or set
-    and call it twice, the second time incrementing the second argument
-    by 1, which should be the channel argument. If the method is a matrix
-    method, both the input and output channels (params 1 & 2) will be
-    incremented.
-    """
+    """Repeat a get/set command for the paired stereo channel."""
     @wraps(func)
-    def stereoFunc(*args, **kwargs):
-        # trying to find a way to have a method
-        # calling another method not do the stereo repeat
-        # so if calling an internal func from a stereo func,
-        # add the stereo kw arg to call
-        # it will be removed before calling underlying func
-
-        if 'stereo' in kwargs.keys():
-            _stereo = kwargs['stereo']
-            del(kwargs['stereo'])
+    async def stereoFunc(*args, **kwargs):
+        if 'stereo' in kwargs:
+            _stereo = kwargs.pop('stereo')
         else:
             _stereo = 1
-        res = func(*args, **kwargs)
-        if args[0].stereo and _stereo:  # self.stereo
-            _LOGGER.debug("Stereo Command {}:{}".format(func.__name__, args))
+        res = await func(*args, **kwargs)
+        if args[0].stereo and _stereo:
+            _LOGGER.debug("Stereo Command %s:%s", func.__name__, args)
             largs = list(args)
             if isinstance(largs[1], str):
-                largs[1] = chr(ord(largs[1])+1)
+                largs[1] = chr(ord(largs[1]) + 1)
             else:
                 largs[1] = largs[1] + 1
-            if func.__name__[3:9] == "Matrix":  # do stereo on input and output
-                _LOGGER.debug("Matrix Stereo Command {}".format(func.__name__))
+            if func.__name__[3:9] == "Matrix":
+                _LOGGER.debug("Matrix Stereo Command %s", func.__name__)
                 if isinstance(largs[2], str):
-                    largs[2] = chr(ord(largs[2])+1)
+                    largs[2] = chr(ord(largs[2]) + 1)
                 else:
                     largs[2] = largs[2] + 1
-            res2 = func(*largs, **kwargs)
+            res2 = await func(*largs, **kwargs)
             if res != res2:
-                _LOGGER.debug("Stereo out of sync {} : {}".format(res, res2))
+                _LOGGER.debug("Stereo out of sync %s : %s", res, res2)
                 warnings.warn("Stereo out of sync", RuntimeWarning)
         if res is not None:
             return res
@@ -122,27 +105,19 @@ def stereo(func):
 
 def is_number(s):
     """ Returns True if string is a number. """
-    if isinstance(s,str):
-        return s.replace('.','',1).replace('-','',1).isdigit()
-    else:
-        return False
+    if isinstance(s, str):
+        return s.replace('.', '', 1).replace('-', '', 1).isdigit()
+    return False
 
 def db2linear(db, maxref=0):
-    """Convert a db level to a linear level of 0-1.
-
-    If maxref is provided, the return value is a proportion of maxref
-    """
-    return (10.0 ** ((float(db) + 0.0000001 - maxref) / 20.0))
+    """Convert a db level to a linear level of 0-1."""
+    return 10.0 ** ((float(db) + 0.0000001 - maxref) / 20.0)
 
 def linear2db(gain, maxref=0):
-    """Convert a linear volume level of 0-1 to db.
-
-    if maxref is provided, then gain parameter provided is used
-    as a proportion of maxref. This is to allow the use of the
-    maxgain level.
-    """
+    """Convert a linear volume level of 0-1 to db."""
     dbdiff = 20.0 * math.log10(float(gain) + 0.000001)
     return min(max(maxref + dbdiff, -99), 99)
+
 
 class XAPCommError(Exception):
     """ Communications Error """
@@ -153,174 +128,19 @@ class XAPRespError(Exception):
     pass
 
 
-class TelnetConnection:
-    """Synchronous wrapper around telnetlib3 that mimics the pyserial interface.
-
-    Exposes open(), close(), write(), readline(), and reset_input_buffer()
-    so it can be used as a drop-in replacement for the pyserial object used
-    by XAPX00.  The underlying TCP connection is kept persistent — open() is
-    a no-op when already connected, and close() is likewise a no-op.  Call
-    disconnect() to tear down the connection explicitly.
-    """
-
-    def __init__(self, host, port=23, timeout=5, username=None, password=None):
-        if not _TELNETLIB3_AVAILABLE:
-            raise ImportError(
-                "telnetlib3 is required for telnet connections. "
-                "Install it with: pip install telnetlib3"
-            )
-        self.host = host
-        self.port = port
-        self.timeout = timeout
-        self.username = username
-        self.password = password
-        self._reader = None
-        self._writer = None
-        self._loop = asyncio.new_event_loop()
-
-    # ------------------------------------------------------------------
-    # Internal async helpers
-    # ------------------------------------------------------------------
-
-    def _run(self, coro):
-        return self._loop.run_until_complete(coro)
-
-    async def _async_read_until(self, prompt):
-        """Read characters until the given prompt string is found."""
-        buf = ''
-        while True:
-            ch = await asyncio.wait_for(self._reader.read(1), timeout=self.timeout)
-            if not ch:
-                break
-            buf += ch
-            if buf.endswith(prompt):
-                break
-        return buf
-
-    async def _async_connect(self):
-        reader, writer = await asyncio.wait_for(
-            telnetlib3.open_connection(self.host, self.port),
-            timeout=self.timeout,
-        )
-        self._reader = reader
-        self._writer = writer
-
-        if self.username is not None:
-            _LOGGER.debug("telnet: waiting for login prompt")
-            prompt = await self._async_read_until('ser: ')
-            _LOGGER.debug("telnet: got login prompt: %r", prompt)
-            writer.write(self.username + '\r')
-            _LOGGER.debug("telnet: sent username, waiting for password prompt")
-            prompt = await self._async_read_until('pass: ')
-            _LOGGER.debug("telnet: got password prompt: %r", prompt)
-            writer.write((self.password or '') + '\r')
-            _LOGGER.debug("telnet: sent password, consuming banner")
-            await asyncio.sleep(0.5)
-            banner = await asyncio.wait_for(self._reader.read(4096), timeout=1)
-            _LOGGER.debug("telnet: post-login banner: %r", banner)
-
-    async def _async_readline(self):
-        """Read until \\r (XAP EOM), since the device doesn't send \\n.
-
-        Returns the line as a string (without the \\r), or None on EOF.
-        """
-        async def read_until_cr():
-            buf = []
-            while True:
-                ch = await self._reader.read(1)
-                if not ch:      # EOF
-                    return None
-                if ch == '\r':
-                    break
-                if ch != '\n':  # skip bare \n (telnet may send \r\n)
-                    buf.append(ch)
-            return ''.join(buf)
-
-        return await asyncio.wait_for(read_until_cr(), timeout=self.timeout)
-
-    async def _async_drain(self):
-        await self._writer.drain()
-
-    async def _async_drain_input(self):
-        try:
-            await asyncio.wait_for(self._reader.read(4096), timeout=0.1)
-        except asyncio.TimeoutError:
-            pass
-
-    # ------------------------------------------------------------------
-    # pyserial-compatible interface
-    # ------------------------------------------------------------------
-
-    def open(self):
-        """Connect if not already connected."""
-        if self._writer is not None:
-            return
-        self._run(self._async_connect())
-
-    def reconnect(self):
-        """Tear down any existing connection and re-establish it (with login)."""
-        self.disconnect()
-        self._run(self._async_connect())
-
-    def close(self):
-        """No-op — the telnet connection is kept persistent between commands.
-
-        Call disconnect() to actually tear down the connection.
-        """
-        pass
-
-    def disconnect(self):
-        """Tear down the telnet connection."""
-        if self._writer is not None:
-            self._writer.close()
-            self._reader = None
-            self._writer = None
-
-    def write(self, data: bytes) -> int:
-        """Send bytes to the device (decoded to str for telnetlib3)."""
-        text = data.decode()
-        self._writer.write(text)
-        self._run(self._async_drain())
-        return len(data)
-
-    def readline(self) -> bytes:
-        """Read one line from the device and return it as bytes."""
-        line = self._run(self._async_readline())
-        if line is None:
-            return b''
-        if isinstance(line, str):
-            return line.encode()
-        return line
-
-    def reset_input_buffer(self):
-        """Drain any buffered input from the device."""
-        self._run(self._async_drain_input())
-
-class XAPX00(object):
-    """XAPX000 Module."""
+class XAPX00:
+    """ClearOne XAP/Converge mixer controller — async interface."""
 
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
                  stereo=0, XAPType=XAP800TYPE,
                  connection_type="serial", telnet_host=None, telnet_port=23,
                  telnet_username="clearone", telnet_password="converge"):
-        """Initialize the XAPX00 controller.
-
-        Args:
-            comPort: Serial port path (used when connection_type="serial").
-            baudRate: Baud rate for serial connection (default 38400).
-            stereo: Enable stereo mode (repeats commands for paired channels).
-            XAPType: Device type — "XAP800", "XAP400", or "CP880".
-            connection_type: Transport to use — "serial" or "telnet".
-            telnet_host: Hostname or IP address (required for connection_type="telnet").
-            telnet_port: Telnet port number (default 23).
-            telnet_username: Telnet login username (default "clearone").
-            telnet_password: Telnet login password (default "converge").
-        """
-        _LOGGER.info("XAPX00 version: {}".format(__version__))
-        self.connection_type = connection_type
-        self.stereo       = stereo
-        self.XAPType      = XAPType
-        self.matrixGeo    = matrixGeo[self.XAPType]
+        """Set up attributes.  Call await obj.connect() or use XAPX00.create()."""
+        _LOGGER.info("XAPX00 version: %s", __version__)
+        self.connection_type  = connection_type
+        self.stereo           = stereo
+        self.XAPType          = XAPType
+        self.matrixGeo        = matrixGeo[XAPType]
         if XAPType == XAP800TYPE:
             self.XAPCMD = XAP800_CMD
         elif XAPType == CP880TYPE:
@@ -331,1351 +151,536 @@ class XAPX00(object):
             self.XAPCMD = CP880TA_CMD
         else:
             self.XAPCMD = XAP400_CMD
-        self.timeout      = 2
-        self.connectionLive = 0
-        self.input_range  = range(1, 13)
-        self.output_range = range(1, 13)
-        self.convertDb    = 1  # translate levels between linear(0-1) and db
-        self._lastcall    = time.time()
-        self._maxtime     = 60 * 60 * 1  # 1 hour
-        self._maxrespdelay = 5
-        self._sleeptime   = 0.25
-        self.ExpansionChannels = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
-        self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
-        self._commlock = Lock()
-        self._last_attempt = 0
-        self._retry_interval = 10  # seconds between connection attempts when unit is offline
-        self._serialconn = None
-        self.UID = None
 
-        if connection_type == "telnet":
-            if telnet_host is None:
-                raise ValueError("telnet_host is required when connection_type='telnet'")
-            self.telnet_host = telnet_host
-            self.telnet_port = telnet_port
-            self.telnet_username = telnet_username
-            self.telnet_password = telnet_password
-            self.get_telnet_connection()
+        self.timeout          = 2
+        self.connectionLive   = 0
+        self.UID              = None
+        self.input_range      = range(1, 13)
+        self.output_range     = range(1, 13)
+        self.convertDb        = 1
+        self._lastcall        = time.time()
+        self._maxtime         = 60 * 60 * 1
+        self._maxrespdelay    = 5
+        self._sleeptime       = 0.25
+        self.ExpansionChannels   = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
+        self.ProcessingChannels  = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
+        self._commlock        = asyncio.Lock()
+        self._last_attempt    = 0
+        self._retry_interval  = 10
+        self._reader          = None
+        self._writer          = None
+
+        # Serial params
+        self.comPort  = comPort
+        self.baudRate = baudRate
+
+        # Telnet params
+        self.telnet_host     = telnet_host
+        self.telnet_port     = telnet_port
+        self.telnet_username = telnet_username
+        self.telnet_password = telnet_password
+
+        if connection_type == "telnet" and telnet_host is None:
+            raise ValueError("telnet_host is required when connection_type='telnet'")
+        if connection_type == "serial" and not _SERIALX_AVAILABLE:
+            raise ImportError("serialx is required for serial connections: pip install serialx")
+        if connection_type == "telnet" and not _TELNETLIB3_AVAILABLE:
+            raise ImportError("telnetlib3 is required for telnet connections: pip install telnetlib3")
+
+    @classmethod
+    async def create(cls, **kwargs):
+        """Async factory — create and connect in one step."""
+        obj = cls(**kwargs)
+        await obj.connect()
+        return obj
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    async def connect(self):
+        """Open transport and verify connectivity."""
+        if self.connection_type == "telnet":
+            await self._open_telnet()
         else:
-            if not _SERIAL_AVAILABLE:
-                raise ImportError("pyserial is required for serial connections. Install it with: pip install pyserial")
-            self.comPort      = comPort
-            self.baudRate     = baudRate
-            self.byteLength   = serial.EIGHTBITS
-            self.stopBits     = serial.STOPBITS_ONE
-            self.parity       = serial.PARITY_NONE
-            self.get_serial_port()
+            await self._open_serial()
+        await self.test_connection()
 
-        self.test_connection()
-        _LOGGER.debug("XAPX00 __init__ complete")
-
-    def get_serial_port(self):
-        _LOGGER.debug("XAPX00.get_serial_port")
-        serialconn = serial.serial_for_url(self.comPort, timeout=self.timeout,
-                                           baudrate=self.baudRate,
-                                           write_timeout=self.timeout,
-                                           do_not_open=True)
-        self._serialconn = serialconn
-
-    def get_telnet_connection(self):
-        """Create a TelnetConnection and assign it to _serialconn."""
-        _LOGGER.debug("XAPX00.get_telnet_connection host=%s port=%s",
-                      self.telnet_host, self.telnet_port)
-        self._serialconn = TelnetConnection(
-            host=self.telnet_host,
-            port=self.telnet_port,
-            timeout=self.timeout,
-            username=self.telnet_username,
-            password=self.telnet_password,
+    async def _open_serial(self):
+        _LOGGER.debug("Opening serial %s @ %s baud", self.comPort, self.baudRate)
+        self._reader, self._writer = await serialx.open_serial_connection(
+            url=self.comPort, baudrate=self.baudRate
         )
+        _LOGGER.debug("Serial streams ready")
 
-    def connect(self, check=False):
-        """Open serial port and check connection.
-        This method was originally used when a persistent connection was assumed.
-        No longer used."""
-        _LOGGER.info("connect called, shouldn't be")
-        return
-        # if self.connected:
-        #     return
-        # self.serial = self.get_serial_port()
-        # if check:
-        #     _LOGGER.info("Connecting to XAPX00 at " + str(self.baudRate) +
-        #                  " baud...")
-        #     # Ensure connectivity by requesting the UID of the first unit
-        #     self.serial.reset_input_buffer()
-        #     self.serial.write(("%s0 SERECHO 1 %s" % (self.XAPCMD,EOM)).encode())
-        #     self.serial.readlines(3) #clear response
-        #     uid = self.getUniqueId(0)
-        #     _LOGGER.info("Connected, got uniqueID %s", str(uid))
-        # self.connected = 1
+    async def _open_telnet(self):
+        _LOGGER.debug("Connecting telnet %s:%s", self.telnet_host, self.telnet_port)
+        reader, writer = await asyncio.wait_for(
+            telnetlib3.open_connection(self.telnet_host, self.telnet_port),
+            timeout=self.timeout,
+        )
+        self._reader = reader
+        self._writer = writer
+        _LOGGER.debug("Telnet connected")
+        if self.telnet_username:
+            await self._telnet_login()
 
-    def disconnect(self):
-        """Disconnect from the device.
+    async def _read_until(self, prompt):
+        """Read one character at a time until the given prompt suffix is seen."""
+        buf = ''
+        while True:
+            ch = await asyncio.wait_for(self._reader.read(1), timeout=self.timeout)
+            if not ch:
+                break
+            buf += ch
+            if buf.endswith(prompt):
+                break
+        return buf
 
-        For telnet connections this tears down the TCP connection.
-        For serial connections this is a no-op (serial is opened/closed
-        per-command and never held open persistently).
-        """
-        if self.connection_type == "telnet" and self._serialconn is not None:
-            _LOGGER.info("disconnect: closing telnet connection")
-            self._serialconn.disconnect()
-            self.connectionLive = 0
-        # if self.connected:
-        #     self.serial.close()
-        #     self.connected = 0
+    async def _telnet_login(self):
+        _LOGGER.debug("telnet: waiting for login prompt")
+        prompt = await self._read_until('ser: ')
+        _LOGGER.debug("telnet: got login prompt: %r", prompt)
+        self._writer.write(self.telnet_username + '\r')
+        _LOGGER.debug("telnet: waiting for password prompt")
+        prompt = await self._read_until('pass: ')
+        _LOGGER.debug("telnet: got password prompt: %r", prompt)
+        self._writer.write((self.telnet_password or '') + '\r')
+        _LOGGER.debug("telnet: sent password, consuming banner")
+        await asyncio.sleep(0.5)
+        banner = await asyncio.wait_for(self._reader.read(4096), timeout=1)
+        _LOGGER.debug("telnet: post-login banner: %r", banner)
 
-    def send(self, data):
-        """Send the specified data string to the XAP800
+    async def disconnect(self):
+        """Close the transport."""
+        if self._writer is not None:
+            try:
+                self._writer.close()
+            except Exception:
+                pass
+            self._reader = None
+            self._writer = None
+        self.connectionLive = 0
 
-        Returns:
-            number of bytes sent
-        """
-        _LOGGER.info("Old style send called")
-        return
-        # self._commlock.acquire()
-        # try:
-        #     self._serialconn.open() # = self.get_serial_port()
-        #     _LOGGER.debug("Sending: %s", data)
-        #     if not testing:
-        #         bytessent = self._serialconn.write(data.encode())
-        #         return bytessent
-        #     else:
-        #         return len(data)
-        # finally:
-        #     if self._serialconn is not None:
-        #         self._serialconn.close()
-        #     self._commlock.release()
+    async def reconnect(self):
+        """Tear down and re-establish the connection."""
+        await self.disconnect()
+        await self.connect()
 
-    def readResponse(self, numElements=1): #, serial_conn=None):
-        """Get response from unit.
+    # ------------------------------------------------------------------
+    # Low-level I/O
+    # ------------------------------------------------------------------
 
-        Args:
-        numElements: How many response components to return,
-                     starts from end of resposne
+    async def _readline(self):
+        """Read until \\r (XAP EOM).  Returns str without \\r, or '' on EOF."""
+        buf = []
+        while True:
+            ch = await asyncio.wait_for(self._reader.read(1), timeout=self.timeout)
+            if not ch:
+                return ''
+            # telnetlib3 yields str; serialx yields bytes
+            if isinstance(ch, (bytes, bytearray)):
+                ch = ch.decode(errors='replace')
+            if ch == '\r':
+                break
+            if ch != '\n':
+                buf.append(ch)
+        return ''.join(buf)
 
-        Returns:
-            response string from unit
-        """
+    async def _write(self, data: bytes):
+        if self.connection_type == 'telnet':
+            self._writer.write(data.decode())
+            await self._writer.drain()
+        else:
+            self._writer.write(data)
+            await self._writer.drain()
+
+    # ------------------------------------------------------------------
+    # Protocol
+    # ------------------------------------------------------------------
+
+    async def readResponse(self, numElements=1):
+        """Read lines until one contains '#'; return the parsed value(s)."""
         blank = 0
-        while 1:
-            resp = self._serialconn.readline().decode()
-            _LOGGER.debug("readResponse raw: %r" % resp)
+        while True:
+            resp = await self._readline()
+            _LOGGER.debug("readResponse raw: %r", resp)
             if 'ERROR' in resp:
                 raise XAPRespError(resp)
-            if resp.find('#') > -1:
-                break
             if resp == '':
-                if self.connection_type == 'telnet':
-                    blank +=1
-                    if blank >2:
-                        raise XAPCommError('No Response')
-                    else:
-                        continue  # blank lines are normal on telnet; timeout handles no-response
-                else:
-                    raise XAPCommError('No Response')
-#                    return None  # serial empty read means no data coming
-        respitems = resp.split("#", maxsplit=1)[1].split()
+                blank += 1
+                if blank > 2:
+                    raise XAPCommError('No response from device')
+                continue
+            if '#' in resp:
+                break
+        respitems = resp.split('#', maxsplit=1)[1].split()
         if numElements == 1:
             return respitems[-1]
-        else:
-            return respitems[-numElements:]
-        
-    def XAPCommand(self, command, *args, **kwargs):
-        """Call command and return value.
+        return respitems[-numElements:]
 
-        Raises XAPCommError if the unit is unreachable or returns an error.
+    async def XAPCommand(self, command, *args, **kwargs):
+        """Send a command and return the parsed response.
+
+        Raises XAPCommError on transport failure, XAPRespError on device error.
         """
-        self._commlock.acquire()
- #       serialconn = None
-        try:
-            self._serialconn.open()
+        async with self._commlock:
             unitCode = kwargs.get('unitCode', 0)
             rtnCount = kwargs.get('rtnCount', 1)
-            args = [str(x) for x in args]
-            xapstr = "%s%s %s %s %s" % (self.XAPCMD, unitCode, command, " ".join(args), EOM)
-            _LOGGER.debug("sending command: {}".format(xapstr))
-            self._serialconn.write(xapstr.encode())
+            str_args = [str(x) for x in args]
+            xapstr = "%s%s %s %s %s" % (
+                self.XAPCMD, unitCode, command, " ".join(str_args), EOM)
+            _LOGGER.debug("sending command: %s", xapstr.strip())
             try:
-                res = self.readResponse(numElements=rtnCount)
-            except XAPCommError:
-                if self.connection_type == 'telnet':
-                    _LOGGER.warning("No response on telnet; reconnecting and retrying %s", command)
-                    self._serialconn.reconnect()
-                    self._serialconn.write(xapstr.encode())
-                    res = self.readResponse(numElements=rtnCount)
-                else:
-                    raise
-            self.connectionLive = 1
-            return res
-        except XAPRespError as e:
-            raise
-        except (OSError, TimeoutError, asyncio.TimeoutError) as e:
-            self.connectionLive = 0
-            raise XAPCommError("Command {} failed: {}".format(command, e)) from e
-        finally:
-            if self._serialconn is not None:
-                self._serialconn.close()
-            self._commlock.release()
+                await self._write(xapstr.encode())
+                try:
+                    res = await self.readResponse(numElements=rtnCount)
+                except XAPCommError:
+                    if self.connection_type == 'telnet':
+                        _LOGGER.warning("No response; reconnecting and retrying %s", command)
+                        await self.reconnect()
+                        await self._write(xapstr.encode())
+                        res = await self.readResponse(numElements=rtnCount)
+                    else:
+                        raise
+                self.connectionLive = 1
+                return res
+            except XAPRespError:
+                raise
+            except (OSError, TimeoutError, asyncio.TimeoutError) as e:
+                self.connectionLive = 0
+                raise XAPCommError("Command {} failed: {}".format(command, e)) from e
 
-    def test_connection(self):
-        """Return True if connection works, False if not.
-
-        Applies a backoff so repeated calls don't hammer the port while the
-        unit is offline — retries at most once every _retry_interval seconds.
-        """
-        _LOGGER.debug('test_connection')
+    async def test_connection(self):
+        """Send a UID command and verify a response.  Returns True/False."""
+        _LOGGER.debug("test_connection")
         now = time.time()
         if not self.connectionLive and (now - self._last_attempt) < self._retry_interval:
             return False
         self._last_attempt = now
-
-        self._commlock.acquire()
         try:
-            if hasattr(self, 'baudRate'):
-                _LOGGER.debug("Connecting to XAPX00 at " + str(self.baudRate) + " baud...")
-            else:
-                _LOGGER.debug("Connecting to XAPX00 via telnet %s:%s...", self.telnet_host, self.telnet_port)
-            self._serialconn.open() #will get an exception here if device not present / invalid path
-            if hasattr(self, 'comPort'):
-                _LOGGER.debug('commport opened: %s' % self.comPort)
-            str_to_write= "%s0 UID %s" % (self.XAPCMD, EOM)
-            _LOGGER.debug("writing: %s" % str_to_write)
-            bytes_written = self._serialconn.write(str_to_write.encode())
-            if bytes_written < 1:
-                raise XAPCommError('XAPCommError - test_connection: %s written' % bytes_written)                
-            resp = self.readResponse()
-            _LOGGER.debug('test_connection response: %s' % resp)
-            if resp not in (None, ''):
-                self.connectionLive = 1
-                _LOGGER.debug('connected, UID: %s' % resp)
-                if self.UID is None:
-                    self.UID = resp
-                return True #isinstance(uid, str)
+            str_to_write = "%s0 UID %s" % (self.XAPCMD, EOM)
+            _LOGGER.debug("writing: %s", str_to_write.strip())
+            await self._write(str_to_write.encode())
+            resp = await self.readResponse()
+            _LOGGER.debug("test_connection response: %s", resp)
+            self.connectionLive = 1
+            if self.UID is None:
+                self.UID = resp
+            _LOGGER.debug("connected, UID: %s", resp)
+            return True
         except (XAPCommError, OSError, TimeoutError, asyncio.TimeoutError) as e:
-            _LOGGER.debug('Exception in test_connection: %s\n setting conectionLive=False' % e)
+            _LOGGER.debug("test_connection failed: %s", e)
             self.connectionLive = 0
             return False
-        finally:
-            if self._serialconn is not None:
-                self._serialconn.close()
-            self._commlock.release()
-    
-    def reset(self):
-        """Reset connection."""
-        warnings.warn("Clearing Serial Connection")
-        self._serialconn.reset_input_buffer()
 
-    def getUniqueId(self, unitCode=0):
-        """Requests the unique ID of the target XAP800.
+    async def reset(self):
+        """Drain input buffer."""
+        if self._reader is not None:
+            try:
+                await asyncio.wait_for(self._reader.read(4096), timeout=0.1)
+            except (asyncio.TimeoutError, TimeoutError):
+                pass
 
-        This is a hex value preprogrammed at the factory.
+    # ------------------------------------------------------------------
+    # Device commands
+    # ------------------------------------------------------------------
 
-        unitCode - the unit code of the target XAP800
-        """
-        res = self.XAPCommand("UID", unitCode=unitCode)
-        return res
-    
-    def getVersion(self, unitCode=0):
-        """Requests the hardware version of the target XAP.
-        """
-        res = self.XAPCommand("VER", unitCode=unitCode)
-        return res
-    
-    @stereo
-    def setDecayRate(self, channel, decayRate, unitCode=0):
-        """Modify the decay rate for the specified XAP800.
+    async def getUniqueId(self, unitCode=0):
+        """Return the factory-programmed unique ID (hex string)."""
+        return await self.XAPCommand("UID", unitCode=unitCode)
 
-        unitCode:   the unit code of the target XAP800
-        channel:    1-8
-        decayRate:  the rate of decay
-                       1 = slow, 2 = medium, 3 = fast
-        """
-        # Ensure compliance with level boundary conditions
-        if decayRate < 1:
-            decayRate = 1
-        elif decayRate > 3:
-            decayRate = 3
-        res = self.XAPCommand("DECAY", channel, decayRate, unitCode=unitCode)
-        return int(res)
-
+    async def getVersion(self, unitCode=0):
+        """Return the firmware version string."""
+        return await self.XAPCommand("VER", unitCode=unitCode)
 
     @stereo
-    def getDecayRate(self, channel, unitCode=0):
-        """Request the decay rate for the specified XAP800.
-
-        channel: 1-8
-        unitCode - the unit code of the target XAP800
-        """
-        res = self.XAPCommand("DECAY", channel, unitCode=unitCode)
+    async def setDecayRate(self, channel, decayRate, unitCode=0):
+        """Set decay rate: 1=slow, 2=medium, 3=fast."""
+        decayRate = max(1, min(3, decayRate))
+        res = await self.XAPCommand("DECAY", channel, decayRate, unitCode=unitCode)
         return int(res)
 
     @stereo
-    def setEchoCanceller(self, channel, isEnabled=True, unitCode=0):
-        """Enable/Disable the echo canceller.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        isEnabled - true to enable the channel, false to disable
-        """
-        if self.XAPType == XAP800TYPE:
-            ec = "AEC"
-        else:
-            ec = "EC"
-        res = self.XAPCommand(ec, channel, "1" if isEnabled else "0", unitCode=unitCode)
-        return int(res)
-
-
-    @stereo
-    def getEchoCanceller(self, channel, unitCode=0):
-        """Enable or disable the echo canceller for the channel-unit.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        isEnabled - true to enable the channel, false to disable
-        """
-        if self.XAPType == XAP800TYPE:
-            ec = "AEC"
-        else:
-            ec = "EC"
-        res = self.XAPCommand(ec, channel, unitCode=unitCode)
+    async def getDecayRate(self, channel, unitCode=0):
+        res = await self.XAPCommand("DECAY", channel, unitCode=unitCode)
         return int(res)
 
     @stereo
-    def getMaxGain(self, channel, group="I", unitCode=0, **kwargs):
-        """Get max gain setting for a channel."""
-        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+    async def setEchoCanceller(self, channel, isEnabled=True, unitCode=0):
+        ec = "AEC" if self.XAPType == XAP800TYPE else "EC"
+        res = await self.XAPCommand(ec, channel, "1" if isEnabled else "0", unitCode=unitCode)
+        return int(res)
+
+    @stereo
+    async def getEchoCanceller(self, channel, unitCode=0):
+        ec = "AEC" if self.XAPType == XAP800TYPE else "EC"
+        res = await self.XAPCommand(ec, channel, unitCode=unitCode)
+        return int(res)
+
+    @stereo
+    async def getMaxGain(self, channel, group="I", unitCode=0, **kwargs):
+        if group in nogainGroups:
             raise Exception('Gain not available on Expansion Bus')
-        resp = self.XAPCommand("MAX", channel, group, unitCode=unitCode)
+        resp = await self.XAPCommand("MAX", channel, group, unitCode=unitCode)
         if is_number(resp):
             return float(resp)
-        else: 
-            raise XAPCommError
+        raise XAPCommError
 
     @stereo
-    def setMaxGain(self, channel, gain, group="I", unitCode=0):
-        """Set max gain setting for a channel."""
-        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+    async def setMaxGain(self, channel, gain, group="I", unitCode=0):
+        if group in nogainGroups:
             raise Exception('Gain not available on Expansion Bus')
-        resp = self.XAPCommand("MAX", channel, group, gain, unitCode=unitCode)
+        resp = await self.XAPCommand("MAX", channel, group, gain, unitCode=unitCode)
         if is_number(resp):
             return resp
-        else:
-            raise XAPCommError
+        raise XAPCommError
 
     @stereo
-    def getPropGain(self, channel, group="I", unitCode=0):
-        """Get gain level for a channel relative to that channel's maxgain setting
-
-        Returned as linear scale of 0-1, with 1=maxgain
-        """
-        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+    async def getPropGain(self, channel, group="I", unitCode=0):
+        if group in nogainGroups:
             raise Exception('Gain not available on Expansion Bus')
-        maxdb = self.getMaxGain(channel, group=group, unitCode=unitCode,
-                                stereo=0)
-        resp = self.XAPCommand("GAIN", channel, group, unitCode=unitCode, rtnCount=2)[0]
-        if is_number(resp):
-            resp = db2linear(resp, maxdb)
-            return resp
-        else:
-            raise XAPCommError("resp={}".format(resp))
-
-    @stereo
-    def setPropGain(self, channel, gain, isAbsolute=1, group="I", unitCode=0):
-        """Set gain level for a channel relative to that channel's maxgain setting.
-
-        Gain input is on a linear scale of 0-1, with 1=maxgain
-        """
-        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
-            raise Exception('Gain not available on Expansion Bus')
-        maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
-        dbgain = linear2db(gain, maxdb)  # if self.convertDb else gain
-        dbgain = "{0:.4f}".format(dbgain)
-        _LOGGER.debug("setPropGain: linear:{}, max:{}, db:{}".format( gain, maxdb, dbgain)) 
-        resp = self.XAPCommand("GAIN", channel, group, dbgain, "A" if isAbsolute == 1 else "R",
-                               unitCode=unitCode, rtnCount=2)[0] 
+        maxdb = await self.getMaxGain(channel, group=group, unitCode=unitCode, stereo=0)
+        resp = (await self.XAPCommand("GAIN", channel, group, unitCode=unitCode, rtnCount=2))[0]
         if is_number(resp):
             return db2linear(resp, maxdb)
-        else:
-            raise XAPCommError
+        raise XAPCommError("resp={}".format(resp))
 
     @stereo
-    def getGain(self, channel, group="I", unitCode=0):
-        """Get gain level for a channel/group, 0 - 1"""
-        if group == 'E': #E is expansion, GAIN is set on source unit, so return max
+    async def setPropGain(self, channel, gain, isAbsolute=1, group="I", unitCode=0):
+        if group in nogainGroups:
             raise Exception('Gain not available on Expansion Bus')
-        else:
-            resp = self.XAPCommand("GAIN", channel, group, unitCode = unitCode,
-                                   rtnCount=2)[0]
+        maxdb = await self.getMaxGain(channel, group, unitCode, stereo=0)
+        dbgain = "{0:.4f}".format(linear2db(gain, maxdb))
+        _LOGGER.debug("setPropGain: linear:%s, max:%s, db:%s", gain, maxdb, dbgain)
+        resp = (await self.XAPCommand("GAIN", channel, group, dbgain,
+                                      "A" if isAbsolute == 1 else "R",
+                                      unitCode=unitCode, rtnCount=2))[0]
+        if is_number(resp):
+            return db2linear(resp, maxdb)
+        raise XAPCommError
+
+    @stereo
+    async def getGain(self, channel, group="I", unitCode=0):
+        if group == 'E':
+            raise Exception('Gain not available on Expansion Bus')
+        resp = (await self.XAPCommand("GAIN", channel, group,
+                                      unitCode=unitCode, rtnCount=2))[0]
         if is_number(resp):
             return db2linear(resp) if self.convertDb else resp
-        else:
-            raise XAPCommError
+        raise XAPCommError
 
     @stereo
-    def setGain(self, channel, gain, isAbsolute=1, group="I", unitCode=0):
-        """Sets the gain on the specified channel for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, A-D, 1-2, or * for all)
-        channelType - the type of channel (I for input, O for output,
-                                           S for subbus)
-        gain - the amount of gain to apply, 0 - 1.
-        isAbsolute - true if the level specified is an absolute setting,
-                     false if it's a relative movement.
-        """
-        if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
+    async def setGain(self, channel, gain, isAbsolute=1, group="I", unitCode=0):
+        if group in nogainGroups:
             raise Exception('Gain not available on Expansion Bus')
         gain = linear2db(gain) if self.convertDb else gain
         gain = "{0:.4f}".format(gain)
-        resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
-                               unitCode=unitCode, rtnCount=2)[0]
+        resp = (await self.XAPCommand("GAIN", channel, group, gain,
+                                      "A" if isAbsolute == 1 else "R",
+                                      unitCode=unitCode, rtnCount=2))[0]
         if is_number(resp):
             return db2linear(resp) if self.convertDb else resp
-        else:
-            raise XAPCommError
+        raise XAPCommError
 
     @stereo
-    def getLevel(self, channel, group="I", stage="I", unitCode=0):
-        """Requests the db level of the target channel on the specified XAP800.
-
-        read-only
-
-        channel - the target channel (1-8, A-D)
-        unitCode - the unit code of the target XAP800
-        group - the target channel type
-        stage - See documentation
-        """
-        resp = self.XAPCommand("LVL", channel, group, stage, unitCode=unitCode)
+    async def getLevel(self, channel, group="I", stage="I", unitCode=0):
+        resp = await self.XAPCommand("LVL", channel, group, stage, unitCode=unitCode)
         if is_number(resp):
             return float(resp)
-        else:
-            raise XAPCommError
+        raise XAPCommError
 
-    def getLabel(self, channel, group, unitCode=0):
-        """Retrieve the text label assigned to an inpout or ouput"""
-        resp = self.XAPCommand("LABEL", channel, group, unitCode=unitCode)
-        return resp
-    
-    @stereo
-    def setMatrixRouting(self, inChannel, outChannel, state=1, inGroup="I",
-                         outGroup="O", unitCode=0):
-        """Set the routing matrix for the target channel.
-
-        unitCode - the unit code of the target XAP800
-        inChannel - the target input channel or group (1-25 see
-                    page 64 of the XAP800 manual for
-                    details)
-        outChannel - the target output channel or group (1-25 see
-                    page 64 of the XAP800 manual for
-                    details)
-        inGroup - input group (I-inlts, M=mics, L=line, ...
-        outGroup - otput group (O=all Outputs 1-12, P=processing A-H, ...
-        state - 0=off, 1=on (line inputs only), 2=toggle (line only),
-               3=Non-Gated (mic only), 4=Gated (mic only), Null=currrent mode
-        """
-        res = self.XAPCommand("MTRX",inChannel, inGroup,
-                   outChannel, outGroup, state, unitCode=unitCode)
-        return res
+    async def getLabel(self, channel, group, unitCode=0):
+        return await self.XAPCommand("LABEL", channel, group, unitCode=unitCode)
 
     @stereo
-    def getMatrixRouting(self, inChannel, outChannel, inGroup="I",
-                         outGroup="O", unitCode=0, **kwargs):
-        """Gets the routing matrix for the target channel
+    async def setMatrixRouting(self, inChannel, outChannel, state=1,
+                               inGroup="I", outGroup="O", unitCode=0):
+        return await self.XAPCommand("MTRX", inChannel, inGroup,
+                                     outChannel, outGroup, state, unitCode=unitCode)
 
-        Args:
-            unitCode - the unit code of the target XAP800
-            inChannel - the target input channel (1-25 see
-                    page 64 of the XAP800 manual for
-                    details)
-            outChannel - a hex value specifying the output mix as a
-                 series of bit flags (again, see pg 64).
-            inGroup - input group (I-inlts, M=mics, L=line, ...
-            outGroup - otput group (O=all Outputs 1-12, P=processing A-H, ...
+    @stereo
+    async def getMatrixRouting(self, inChannel, outChannel,
+                               inGroup="I", outGroup="O", unitCode=0, **kwargs):
+        return await self.XAPCommand("MTRX", inChannel, inGroup,
+                                     outChannel, outGroup, unitCode=unitCode)
 
-        Return:
-            state: 0=off, 1=on (line inputs only), 2=toggle (line only),
-               3=Non-Gated (mic only), 4=Gated (mic only), Null=currrent mode
-        """
-        resp = self.XAPCommand("MTRX",inChannel, inGroup,
-                   outChannel, outGroup, unitCode=unitCode)
-        return resp
-
-    def getMatrixRoutingReport(self, unitCode=0):
-        """Returns a matrix of levels as a list of lists"""
+    async def getMatrixRoutingReport(self, unitCode=0):
         routingMatrix = []
-        for x in range(0, self.matrixGeo):
+        for x in range(self.matrixGeo):
             routingMatrix.append([])
-            for y in range(0, self.matrixGeo):
-                routingMatrix[x].append(self.getMatrixRouting(
-                    x + 1, y + 1, unitCode=unitCode, stereo=0))
+            for y in range(self.matrixGeo):
+                routingMatrix[x].append(
+                    await self.getMatrixRouting(x + 1, y + 1, unitCode=unitCode, stereo=0))
         return routingMatrix
 
     @stereo
-    def setMatrixLevel(self, inChannel, outChannel, level=0,
-                       isAbsolute=1, inGroup="I", outGroup="O", unitCode=0):
-        """Sets the matrix level at the crosspoint.
-
-        unitCode:   the unit code of the target XAP800
-        inChannel:  the target input channel or group (1-25 see
-                    page 64 of the XAP800 manual for
-                    details)
-        outChannel: the target output channel or group (1-25 see
-                    page 64 of the XAP800 manual for
-                    details)
-        inGroup:  input group (I-inlts, M=mics, L=line, ...
-        outGroup: output group (O=all Outputs 1-12, P=processing A-H, ...
-        level:    0 - 1
-        """
+    async def setMatrixLevel(self, inChannel, outChannel, level=0,
+                             isAbsolute=1, inGroup="I", outGroup="O", unitCode=0):
         level = linear2db(level) if self.convertDb else level
-        resp = self.XAPCommand("MTRXLVL", inChannel, inGroup,
-                   outChannel, outGroup, level, "A" if isAbsolute == 1
-                               else "R", unitCode=unitCode, rtnCount=2)[0]
-
+        resp = (await self.XAPCommand("MTRXLVL", inChannel, inGroup,
+                                      outChannel, outGroup, level,
+                                      "A" if isAbsolute == 1 else "R",
+                                      unitCode=unitCode, rtnCount=2))[0]
         return db2linear(resp) if self.convertDb else resp
 
     @stereo
-    def getMatrixLevel(self, inChannel, outChannel, inGroup="I",
-                       outGroup="O", unitCode=0, **kwargs):
-        """
-        Gets the matrix level at the crosspoint
-
-        unitCode - the unit code of the target XAP800
-        inChannel - the target input channel (1-12 see
-                page 64 of the XAP800 manual for
-                details)
-        outChannel - target output channel, 1-12
-        inGroup - input group (I-inlts, M=mics, L=line, ...
-        outGroup - otput group (O=all Outputs 1-12, P=processing A-H, ...
-        """
-        resp = self.XAPCommand("MTRXLVL", inChannel, inGroup,
-                   outChannel, outGroup, unitCode=unitCode, rtnCount=2)[0]
-
+    async def getMatrixLevel(self, inChannel, outChannel,
+                             inGroup="I", outGroup="O", unitCode=0, **kwargs):
+        resp = (await self.XAPCommand("MTRXLVL", inChannel, inGroup,
+                                      outChannel, outGroup,
+                                      unitCode=unitCode, rtnCount=2))[0]
         return db2linear(resp) if self.convertDb else resp
 
-    def getMatrixLevelReport(self, unitCode=0):
-        """Returns a matrix of levels as a list of lists"""
+    async def getMatrixLevelReport(self, unitCode=0):
         levelMatrix = []
-        for x in range(0, self.matrixGeo):
+        for x in range(self.matrixGeo):
             levelMatrix.append([])
-            for y in range(0, self.matrixGeo):
-                levelMatrix[x].append(self.getMatrixLevel(
-                    x + 1, y + 1, unitCode=unitCode, stereo=0))
+            for y in range(self.matrixGeo):
+                levelMatrix[x].append(
+                    await self.getMatrixLevel(x + 1, y + 1, unitCode=unitCode, stereo=0))
         return levelMatrix
 
     @stereo
-    def setMute(self, channel, isMuted=1, group="I", unitCode=0):
-        """Mutes the target channel on the specified XAP800.
-
-        Args:
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8 or *, A-D, 1-2)
-        group -   I=Input, O=Output, M=Mike, etc
-        isMuted - 1 to mute, 0 to unmute, 2 to toggle
-        """
-        resp = self.XAPCommand("MUTE", channel, group, str(isMuted),
-                   unitCode=unitCode)
+    async def setMute(self, channel, isMuted=1, group="I", unitCode=0):
+        resp = await self.XAPCommand("MUTE", channel, group, str(isMuted), unitCode=unitCode)
         return int(resp)
 
     @stereo
-    def getMute(self, channel, group="I", unitCode=0):
-        """Mutes the target channel on the specified XAP800.
-
-        Args:
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8 or *, A-D, 1-2)
-        group -   I=Input, O=Output, M=Mike, etc
-        Return:
-            isMuted - 1=muted, 0=not muted
-        """
-        resp = self.XAPCommand("MUTE", channel, group, unitCode=unitCode)
+    async def getMute(self, channel, group="I", unitCode=0):
+        resp = await self.XAPCommand("MUTE", channel, group, unitCode=unitCode)
         return int(resp)
 
     @stereo
-    def setRamp(self, channel, group, rate, target, unitCode=0):
-        """Ramp the gain.
-
-        Ramp gain at the specified rate in db/sec to the target
-        or to max / min if target is blank (space).
-        """
-        resp = self.XAPCommand("Ramp", channel, group, rate, target, unitCode=unitCode)
+    async def setRamp(self, channel, group, rate, target, unitCode=0):
+        resp = await self.XAPCommand("Ramp", channel, group, rate, target, unitCode=unitCode)
         return int(resp)
 
-#  below here not tested very much ###
-    def setAdaptiveAmbient(self, channel, group="M", isEnabled=1, unitCode=0):
-        """Modifies the state of the adaptive ambient for the specified microphone(s).
-
-        Args:
-            unitCode - the unit code of the target XAP800
-            channel - 1-8 for specific mic channel, or * for all mics
-            group:  "M"ike, "O"utput, "I"nput, etc
-            isEnabled - 1 to enable, 0 to disable
-        """
-        resp = self.XAPCommand("AAMB", channel, group, ("1" if isEnabled else "0"), unitCode=unitCode)
+    async def setAdaptiveAmbient(self, channel, group="M", isEnabled=1, unitCode=0):
+        resp = await self.XAPCommand("AAMB", channel, group,
+                                     "1" if isEnabled else "0", unitCode=unitCode)
         return int(resp)
 
-    def getAdaptiveAmbient(self, channel, group="M", unitCode=0):
-        """Requests the state of the adaptive ambient for the specified mic(s).
-
-        unitCode - the unit code of the target XAP800
-        channel - 1-8 for specific mic channel, or * for all mics
-        """
-        resp = self.XAPCommand("AAMB", channel, group, unitCode=unitCode)
+    async def getAdaptiveAmbient(self, channel, group="M", unitCode=0):
+        resp = await self.XAPCommand("AAMB", channel, group, unitCode=unitCode)
         return int(resp)
 
-    def setAutoGainControl(self, channel, isEnabled, group="I", unitCode=0):
-        """Modifies the state of the automatic gain control (AGC) for the mic(s).
-
-        unitCode - the unit code of the target XAP800
-        channel - 1-8 for specific mic channel, or * for all mics
-        isEnabled - true to enable, false to disable
-        """
-        resp = self.XAPCommand("AGC", channel, group, ("1" if isEnabled else "0"), unitCode=unitCode)
+    async def setAutoGainControl(self, channel, isEnabled, group="I", unitCode=0):
+        resp = await self.XAPCommand("AGC", channel, group,
+                                     "1" if isEnabled else "0", unitCode=unitCode)
         return bool(resp)
 
-    def getAutoGainControl(self, channel, group="I", unitCode=0):
-        """Requests the state of the automatic gain control (AGC) for the mic.
-
-        unitCode - the unit code of the target XAP800
-        channel - 1-8 for specific mic channel, or * for all mics
-        """
-        resp = self.XAPCommand("AGC", channel, group, unitCode=unitCode)
+    async def getAutoGainControl(self, channel, group="I", unitCode=0):
+        resp = await self.XAPCommand("AGC", channel, group, unitCode=unitCode)
         return bool(resp)
-    
-    def setAmbientLevel(self, channel, levelInDb, unitCode=0):
-        """Sets the fixed ambient level of the specified XAP800.
 
-        This value will only be set if adaptive ambient is disabled.
-
-        Args:
-            unitCode - the unit code of the target XAP800
-            levelInDb - the ambient level in dB (0 to -70)
-        """
-        # Ensure compliance with level boundary conditions
-        if levelInDb > 0:
-            levelInDb = 0
-        elif levelInDb < -70:
-            levelInDb = -70
-        resp = self.XAPCommand("AMBLVL", channel, levelInDb, unitCode=unitCode)
+    async def setAmbientLevel(self, channel, levelInDb, unitCode=0):
+        levelInDb = max(-70, min(0, levelInDb))
+        resp = await self.XAPCommand("AMBLVL", channel, levelInDb, unitCode=unitCode)
         return float(resp)
 
-    def getAmbientLevel(self, channel, unitCode=0):
-        """Requests the fixed ambient level of the specified XAP800.
-
-        Args:
-            channel: mic channel 1-9
-            unitCode - the unit code of the target XAP800
-        """
-        resp = self.XAPCommand("AMBLVL", channel, unitCode=unitCode)
+    async def getAmbientLevel(self, channel, unitCode=0):
+        resp = await self.XAPCommand("AMBLVL", channel, unitCode=unitCode)
         return float(resp)
 
-    def getSetBaudRate(self, baudRate, unitCode=0):
-        """Set the baud rate for the RS232 port on the specified XAP800.
+    async def setChairmanOverride(self, channel, isEnabled=0, unitCode=0):
+        resp = await self.XAPCommand("CHAIRO", channel,
+                                     "1" if isEnabled else "0", unitCode=unitCode)
+        return int(resp)
 
-        unitCode - the unit code of the target XAP
-        baudRate - the baud rate (9600, 19200, or 38400)
-        """
+    async def getChairmanOverride(self, channel, unitCode=0):
+        resp = await self.XAPCommand("CHAIRO", channel, unitCode=unitCode)
+        return int(resp)
+
+    async def setPreset(self, preset, state=1, unitCode=0):
+        resp = await self.XAPCommand("PRESET", preset, state, unitCode=unitCode)
+        return int(resp)
+
+    async def getPreset(self, preset, unitCode=0):
+        resp = await self.XAPCommand("PRESET", preset, unitCode=unitCode)
+        return int(resp)
+
+    async def getEchoReturnLoss(self, channel, unitCode=0):
+        resp = await self.XAPCommand("ERL", channel, unitCode=unitCode)
+        return int(resp)
+
+    async def getEchoReturnLossEnhancement(self, channel, unitCode=0):
+        resp = await self.XAPCommand("ERLE", channel, unitCode=unitCode)
+        return int(resp)
+
+    async def enableEqualizer(self, channel, isEnabled=True, unitCode=0):
+        resp = await self.XAPCommand("EQ", channel, "1" if isEnabled else "0", unitCode=unitCode)
+        return bool(resp)
+
+    async def setNonlinearProcessingMode(self, channel, nlpMode, unitCode=0):
+        resp = await self.XAPCommand("NLP", channel, nlpMode, unitCode=unitCode)
+        return int(resp)
+
+    async def getNonlinearProcessingMode(self, channel, unitCode=0):
+        resp = await self.XAPCommand("NLP", channel, unitCode=unitCode)
+        return int(resp)
+
+    async def setMaxActiveMics(self, maxMics, unitCode=0):
+        maxMics = max(0, min(8, maxMics))
+        resp = await self.XAPCommand("MMAX", maxMics, unitCode=unitCode)
+        return int(resp)
+
+    async def getMaxActiveMics(self, unitCode=0):
+        resp = await self.XAPCommand("MMAX", unitCode=unitCode)
+        return int(resp)
+
+    async def enablePhantomPower(self, channel, isEnabled=True, unitCode=0):
+        resp = await self.XAPCommand("PP", channel,
+                                     "1" if isEnabled else "0", unitCode=unitCode)
+        return bool(resp)
+
+    async def getPhantomPower(self, channel, unitCode=0):
+        resp = await self.XAPCommand("PP", channel, unitCode=unitCode)
+        return bool(resp)
+
+    async def setGatingMode(self, channel, mode, unitCode=0):
+        resp = await self.XAPCommand("GMODE", channel, mode, unitCode=unitCode)
+        return int(resp)
+
+    async def getGatingMode(self, channel, unitCode=0):
+        resp = await self.XAPCommand("GMODE", channel, unitCode=unitCode)
+        return int(resp)
+
+    async def setGateRatio(self, gateRatioInDb, unitCode=0):
+        gateRatioInDb = max(0, min(50, gateRatioInDb))
+        resp = await self.XAPCommand("GRATIO", gateRatioInDb, unitCode=unitCode)
+        return float(resp)
+
+    async def getGateRatio(self, unitCode=0):
+        resp = await self.XAPCommand("GRATIO", unitCode=unitCode)
+        return float(resp)
+
+    async def setHoldTime(self, holdTimeInMs, unitCode=0):
+        holdTimeInMs = max(100, min(8000, holdTimeInMs))
+        resp = await self.XAPCommand("HOLD", holdTimeInMs, unitCode=unitCode)
+        return int(resp)
+
+    async def getSetBaudRate(self, baudRate, unitCode=0):
         if self.XAPType == XAP400TYPE:
-            baudRateCode = {9600: 1, 19200: 2, 38400: 3, " ": " ", "":" "}
+            baudRateCode = {9600: 1, 19200: 2, 38400: 3, " ": " ", "": " "}
             rateBaudCode = {v: k for k, v in baudRateCode.items()}
-            baud = baudRateCode.get(baudRate,3)
+            baud = baudRateCode.get(baudRate, 3)
         else:
             baud = baudRate
-        res = self.XAPCommand("BAUD", baud, unitCode=unitCode)
+        res = await self.XAPCommand("BAUD", baud, unitCode=unitCode)
         if self.XAPType == XAP400TYPE:
             res = rateBaudCode.get(res, 0)
         return res
 
-    def setChairmanOverride(self, channel, isEnabled=0, unitCode=0):
-        """Modifies the state of the chairman override for the specified microphone(s).
-
-        unitCode - the unit code of the target XAP800
-        channel - 1-8 for specific mic channel, or * for all mics
-        isEnabled - 0=off, 1=om, 2=toggle
-        """
-        resp = self.XAPCommand("CHAIRO", channel, "1" if isEnabled else "0", unitCode=unitCode)
-        return int(resp)
-
-    def getChairmanOverride(self, channel, unitCode=0):
-        """Modifies the state of the chairman override a microphone(s).
-
-        unitCode - the unit code of the target XAP800
-        channel - 1-8 for specific mic channel, or * for all mics
-        isEnabled - 0=off, 1=om, 2=toggle
-        """
-        resp = self.XAPCommand("CHAIRO", channel, unitCode=unitCode)
-        return int(resp)
-
-    def setPreset(self, preset, state=1, unitCode=0):
-        """Run the preset.
-
-        state: 0: state=off
-        state: 1: execute preset, set state=on
-        state: 2: execute preset, set state=off
-        """
-        resp = self.XAPCommand("PRESET", preset, state, unitCode=unitCode)
-        return int(resp)
-
-    def getPreset(self, preset, unitCode=0):
-        """Get the preset state"""
-        resp = self.XAPCommand("PRESET", preset, unitCode=unitCode)
-        return int(resp)
-
-    def usePreset(self, preset, unitCode=0):
-        """Cause the XAP800 to swap its settings for the given preset.
-
-        Args:
-            unitCode - the unit code of the target XAP800
-            preset - the preset to switch to (1-6)
-        """
-        resp = self.XAPCommand("PRESET", preset, unitCode=unitCode)
-        return int(resp)
-
-    def getEchoReturnLoss(self, channel, unitCode=0):
-        """Request the status of the echo return loss.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel
-        """
-        resp = self.XAPCommand("ERL", channel, unitCode=unitCode)
-        return int(resp)
-
-    def getEchoReturnLossEnhancement(self, channel, unitCode=0):
-        """Request the status of the echo return loss enhancement.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel
-        """
-        resp = self.XAPCommand("ERLE", channel, unitCode=unitCode)
-        return int(resp)
-
-    def enableEqualizer(self, channel, isEnabled=True, unitCode=0):
-        """Enable or disable the equalizer for channel-unit.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        isEnabled - true to enable the channel, false to disable
-        """
-        resp = self.XAPCommand("EQ", channel, "1" if isEnabled else "0", unitCode=unitCode)
-        return bool(resp)
-
-    def setDefaultMeter(self, channel, isInput, unitCode=0):
-        """Modify the default meter.
-
-        unitCode - the unit code of the target XAP800
-        channel - the input or output to set as the meter
-                  (1-8 or A-D)
-        isInput - true if the channel is an input, false
-                  if the channel is an output.
-        """
-        self.send(XAP800_CMD + unitCode + " DFLTM " + channel + " " +
-                  ("I" if isInput else "O") + EOM)
-        return int(self.readResponse())
-
-    def getDefaultMeter(self, unitCode=0):
-        """Request the default meter.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " DFLTM " + EOM)
-        return int(self.readResponse())
-
-    def toggleEqualizer(self, channel, unitCode=0):
-        """Toggle the equalizer for the specified channel-unit.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " EQ " + channel + " 2" + EOM)
-        return int(self.readResponse())
-
-    def requestEqualizer(self, channel, unitCode=0):
-        """Request the status of the equalizer for channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " EQ " + channel + EOM)
-        return int(self.readResponse())
-
-    def enableHardwareFlowControl(self, isEnabled=True, unitCode=0):
-        """Enables or disables hardware flow control for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        isEnabled - true to enable the channel, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " FLOW " +
-                  ("1" if isEnabled else "0") + EOM)
-        return int(self.readResponse())
-
-    def requestHardwareFlowControl(self, unitCode=0):
-        """Request the status of the hardware flow control for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        isEnabled - true to enable the channel, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " FLOW " + EOM)
-        return int(self.readResponse())
-
-    def enableFirstMicPriorityMode(self, isEnabled=True, unitCode=0):
-        """Enable or disable first microphone priority mode.
-
-        unitCode - the unit code of the target XAP800
-        isEnabled - true to enable the channel, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " FMP " +
-                  ("1" if isEnabled else "0") + EOM)
-        return int(self.readResponse())
-
-    def requestFirstMicPriorityMode(self, unitCode=0):
-        """Request the first microphone priority mode.
-
-        unitCode - the unit code of the target XAP800
-        isEnabled - true to enable the channel, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " FMP " + EOM)
-        return int(self.readResponse())
-
-    def setFrontPanelPasscode(self, passcode, unitCode=0):
-        """Set the front panel passcode for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        passcode - the passcode to use for the front panel
-        """
-        self.send(XAP800_CMD + unitCode + " FPP " + passcode + EOM)
-        return int(self.readResponse())
-
-    def requestFrontPanelPasscode(self, unitCode=0):
-        """Request the front panel passcode for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " FPP " + EOM)
-        return int(self.readResponse())
-
-    def requestGate(self, unitCode):
-        """Request the gating status for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " GATE " + EOM)
-        return int(self.readResponse())
-
-    def setGatingMode(self, channel, mode, unitCode=0):
-        """Set the gating mode on the specified channel for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        mode - the gating mode
-               1 = AUTO
-               2 = MANUAL ON
-               3 = MANUAL OFF
-               4 = OVERRIDE ON
-               5 = OVERRIDE OFF
-        """
-        self.send(XAP800_CMD + unitCode + " GMODE " + channel + " " +
-                  mode + EOM)
-        return int(self.readResponse())
-
-    def requestGatingMode(self, channel, unitCode=0):
-        """Request the gating mode on the specified channel for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " GMODE " + channel + EOM)
-        return int(self.readResponse())
-
-    def setGateRatio(self, gateRatioInDb, unitCode=0):
-        """Set the gating ratio for the specified XAP800.
-
-        The ratio is limited to 0-50 values outside the boundary
-        will be anchored to the boundaries.
-
-        unitCode - the unit code of the target XAP800
-        gateRatioInDb - the gating ratio in dB (0-50)
-        """
-        # Ensure compliance with level boundary conditions
-        if gateRatioInDb < 0:
-            gateRatioInDb = 0
-        elif gateRatioInDb > 50:
-            gateRatioInDb = 50
-        self.send(XAP800_CMD + unitCode + " GRATIO " + " " +
-                  gateRatioInDb + EOM)
-        return float(self.readResponse())
-
-    def requestGateRatio(self, unitCode=0):
-        """Request the gating ratio for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " GRATIO" + EOM)
-        return float(self.readResponse())
-
-    def setHoldTime(self, holdTimeInMs, unitCode=0):
-        """Set the hold time for the specified XAP800.
-
-        The value is limited to 100-8000 values outside the boundary
-        will be anchored to the boundaries.
-
-        unitCode - the unit code of the target XAP800
-        holdTimeInMs - the hold time in milliseconds (100-8000)
-        """
-        # Ensure compliance with level boundary conditions
-        holdTimeInMs  = max(min(holdTimeInMs, 8000), 100)
-        self.send(XAP800_CMD + unitCode + " HOLD " + holdTimeInMs + EOM)
-        return int(self.readResponse())
-
-    def setFrontPanelLock(self, isLocked=True, unitCode=0):
-        """Lock or unlock the front panel of the specifid XAP800
-
-        unitCode - the unit code of the target XAP800
-        isLocked - true to lock, false to unlock
-        """
-        self.send(XAP800_CMD + unitCode + " LFP " +
-                  ("1" if isLocked else "0") + EOM)
-        return bool(self.readResponse())
-
-    def toggleFrontPanelLock(self, unitCode=0):
-        """Toggles the front panel lock of the specified XAP800
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " LFP 2" + EOM)
-        return int(self.readResponse())
-
-    def requestFrontPanelLock(self, unitCode):
-        """
-        Requests the front panel lock status of the specified XAP800
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " LFP" + EOM)
-        return int(self.readResponse())
-
-    def setLastMicOnMode(self, mode, unitCode=0):
-        """Set the last microphone on mode of the specified XAP800
-
-        unitCode - the unit code of the target XAP800
-        mode - the last mic on mode
-                                 0 = OFF
-                                 1 = Microphone #1
-                                 2 = Last Microphone On
-        """
-        self.send(XAP800_CMD + unitCode + " LMO " + mode + EOM)
-        return int(self.readResponse())
-
-    def requestLastMicOnMode(self, unitCode=0):
-        """Request the last microphone on mode of the specified XAP800
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " LMO" + EOM)
-        return int(self.readResponse())
-
-    def setMasterMode(self, mode, unitCode=0):
-        """Set the master mode of the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        mode - the master mode
-                                 1 = Master Single
-                                 2 = Dual Mixer
-                                 3 = Slave
-                                 4 = Master Linked
-        """
-        self.send(XAP800_CMD + unitCode + " MASTER " + mode + EOM)
-        return int(self.readResponse())
-
-    def requestMasterMode(self, unitCode=0):
-        """Request the master mode of the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " MASTER " + EOM)
-        return int(self.readResponse())
-
-    def enableModemMode(self, unitCode, isEnabled=True):
-        """Enable or disable the modem mode of the specified XAP800
-
-        unitCode - the unit code of the target XAP800
-        isEnabled - true to enable, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " MDMODE " +
-                  ("1" if isEnabled else "0") + EOM)
-        return bool(self.readResponse())
-
-    def setMicEqualizerAdjustment(self, unitCode, channel, band, eqValue):
-        """Set the microphone equalizer adjustment of the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        band - H=High, M=Medium, L=Low
-        eqValue - the eq value (-12 to 12)
-        """
-        self.send(XAP800_CMD + unitCode + " MEQ " + channel + " " + band +
-                  " " + eqValue + EOM)
-        return float(self.readResponse())
-
-    def requestMicEqualizerAdjustment(self, channel, band, unitCode=0):
-        """Requests the microphone equalizer adjustment of the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        band - H=High, M=Medium, L=Low
-        """
-        self.send(XAP800_CMD + unitCode + " MEQ " + channel + " " + band + EOM)
-        return float(self.readResponse())
-
-    def enableMicHighPassFilter(self, channel, isEnabled=True, unitCode=0):
-        """Enable or disables the microphone high pass filter of the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        isEnabled - true to enable, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " MHP " + channel + " " +
-                  ("1" if isEnabled else "0") + EOM)
-        return bool(self.readResponse())
-
-    def requestMicHighPassFilter(self, channel, unitCode=0):
-        """Request the microphone high pass filter of the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " MHP " + channel + " " + EOM)
-        return bool(self.readResponse())
-
-    def setModemInitString(self, initString, unitCode=0):
-        """Set the modem initialization string of the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        initString - the string to use when initializing the modem
-        """
-        self.send(XAP800_CMD + unitCode + " MINIT " + initString + EOM)
-        return self.readResponse()
-
-    def setMicInputGain(self, unitCode, channel, gain):
-        """Set the microphone input gain for the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        gain - the gain value to use
-                                 1 = 55dB
-                                 2 = 25dB
-                                 3 = 0dB (line level)
-        """
-        self.send(XAP800_CMD + unitCode + " MLINE " + channel +
-                  " " + gain + EOM)
-        return float(self.readResponse())
-
-    def requestMicInputGain(self, channel, unitCode=0):
-        """Request the microphone input gain for the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " MLINE " + channel + EOM)
-        return float(self.readResponse())
-
-    def setMaxActiveMics(self, maxMics, unitCode=0):
-        """Set the maxmimum number of active microphones.
-
-        unitCode - the unit code of the target XAP800
-        maxMics - the maximum number of mics that will be active
-              at the same time (1-8, or 0 for no limit)
-
-        """
-        if maxMics < 0:
-            maxMics = 0
-        elif maxMics > 8:
-            maxMics = 8
-        self.send(XAP800_CMD + unitCode + " MMAX " + maxMics + EOM)
-        return int(self.readResponse())
-
-    def requestMaxActiveMics(self, unitCode=0):
-        """Request the maxmimum number of active microphones
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " MMAX" + EOM)
-        return int(self.readResponse())
-
-    def setModemModePassword(self, modemPassword, unitCode=0):
-        """Set the modem password for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        modemPassword - the modem password
-        """
-        self.send(XAP800_CMD + unitCode + " MPASS " + modemPassword + EOM)
-        return self.readResponse()
-
-    def setMicEchoCancellerReference(self, channel, ecRef, unitCode=0):
-        """Set the microphone echo canceller reference channel
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        ecRef - the reference channel
-                1 = EC Ref 1
-                2 = EC Ref 2
-        """
-        self.send(XAP800_CMD + unitCode + " MREF " + channel +
-                  " " + ecRef + EOM)
-        return int(self.readResponse())
-
-    def requestMicEchoCancellerReference(self, channel, unitCode=0):
-        """Request the microphone echo canceller reference channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " MREF " + channel + EOM)
-        return int(self.readResponse())
-
-    def setNonlinearProcessingMode(self, channel, nlpMode, unitCode=0):
-        """Set the nonlinear processing (NLP) mode of the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        nlpMode - the NLP mode to use
-            0 = OFF
-            1 = Soft
-            2 = Medium
-            3 = Aggressive
-        """
-        self.send(XAP800_CMD + unitCode + " NLP " + channel + " " +
-                  nlpMode + EOM)
-        return int(self.readResponse())
-
-    def requestNonlinearProcessingMode(self, channel, unitCode=0):
-        """Request the nonlinear processing (NLP) mode of the channel-unit.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " NLP " + channel + EOM)
-        return int(self.readResponse())
-
-    def enableNumberOpenMicsAttenuation(self, channel, isEnabled=True,
-                                        unitCode=0):
-        """Enable or disable NOM attenuation for the target channel-unit.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        isEnabled - true to enable NOM, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " NOM " + channel + " " +
-                  ("1" if isEnabled else "0") + EOM)
-        return bool(self.readResponse())
-
-    def requestNumberOpenMicsAttenuation(self, channel, unitCode=0):
-        """Request the NOM attenuation for the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " NOM " + channel + EOM)
-        return float(self.readResponse())
-
-    def setOffAttenuation(self, attenuation, unitCode=0):
-        """Set the off attenuation for the specified XAP800.
-
-        The value is limited to 0-50 values outside the boundary
-        will be anchored to the boundaries.
-
-        unitCode - the unit code of the target XAP800
-        attenuation - the attenuation in dB (0-50)
-        """
-        if attenuation < 0:
-            attenuation = 0
-        elif attenuation > 50:
-            attenuation = 50
-        self.send(XAP800_CMD + unitCode + " OFFA " + attenuation + EOM)
-        return int(self.readResponse())
-
-    def requestOffAttenuation(self, unitCode=0):
-        """Request the off attenuation for the specified XAP800.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " OFFA" + EOM)
-        return int(self.readResponse())
-
-    def enablePaAdaptiveMode(self, isEnabled=True, unitCode=0):
-        """Enable or disable PA adaptive mode.
-
-        unitCode - the unit code of the target XAP800
-        isEnabled - true to enable, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " PAA " +
-                  ("1" if isEnabled else "0") + EOM)
-        return bool(self.readResponse())
-
-    def requestPaAdaptiveMode(self, unitCode=0):
-        """Request the PA adaptive mode.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " PAA" + EOM)
-        return self.readResponse()
-
-    def setControlPinCommand(self, pinLocation, command, unitCode=0):
-        """Specifies the command to be executed when the GPIO pin/control occurs.
-
-        unitCode - the unit code of the target XAP800
-        pinLocation - the pin location (see pg 67 of the
-                  XAP800 manual for specifications)
-        command - the command to execute (any of LFP,
-                                    PRESET, MUTE, GAIN, AGC, EQ, GMODE,
-                                          or CHAIRO)
-        """
-        self.send(XAP800_CMD + unitCode + " PCMD " + pinLocation +
-                  " " + command + EOM)
-        return self.readResponse()
-
-    def clearControlPinCommand(self, pinLocation, unitCode=0):
-        """Clear any commands set for the the GPIO pin/control specified.
-
-        unitCode - the unit code of the target XAP800
-        pinLocation - the pin location (see pg 67 of the
-                  XAP800 manual for specifications)
-        """
-        self.setControlPinCommand(unitCode, pinLocation, "CLEAR")
-        return int(self.readResponse())
-
-    def requestControlPinCommand(self, pinLocation, unitCode=0):
-        """Request the command to be executed when the GPIO pin/control occurs.
-
-        unitCode - the unit code of the target XAP800
-        pinLocation - the pin location (see pg 67 of the
-                  XAP800 manual for specifications)
-        """
-        self.send(XAP800_CMD + unitCode + " PCMD " + pinLocation + EOM)
-        return self.readResponse()
-
-    def setStatusPinCommand(self, pinLocation, command, unitCode=0):
-        """Specifie the command to be executed when the GPIO pin/status occurs.
-
-        unitCode - the unit code of the target XAP800
-        pinLocation - the pin location (see pg 67 of the
-                  XAP800 manual for specifications)
-        command - the command to execute (any of LFP,
-                                    PRESET, MUTE, GAIN, AGC, EQ, GMODE,
-                                          or CHAIRO)
-        """
-        self.send(XAP800_CMD + unitCode + " PEVNT " + pinLocation + " " +
-                  command + EOM)
-        return self.readResponse()
-
-    def clearStatusPinCommand(self, pinLocation, unitCode=0):
-        """Clear any commands set for the GPIO pin/status specified.
-
-        unitCode - the unit code of the target XAP800
-        pinLocation - the pin location (see pg 67 of the
-                  XAP800 manual for specifications)
-        """
-        self.setStatusPinCommand(unitCode, pinLocation, "CLEAR")
-        return int(self.readResponse())
-
-    def requestStatusPinCommand(self, pinLocation, unitCode=0):
-        """Request the command to be executed when the GPIO pin/status occurs.
-
-        unitCode - the unit code of the target XAP800
-        pinLocation - the pin location (see pg 67 of the
-                  XAP800 manual for specifications)
-        """
-        self.send(XAP800_CMD + unitCode + " PEVNT " + pinLocation + EOM)
-        return self.readResponse()
-
-    def enablePhantomPower(self, channel, isEnabled=True, unitCode=0):
-        """Enable or disable phantom power for the target channel.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        isEnabled - true to enable, false to disable
-        """
-        self.send(XAP800_CMD + unitCode + " PP " + channel +
-                  ("1" if isEnabled else "0") + EOM)
-        return bool(self.readResponse())
-
-    def requestPhantomPower(self, channel, unitCode=0):
-        """Request the enable status of phantom power.
-
-        unitCode - the unit code of the target XAP800
-        channel - the target channel (1-8, or * for all)
-        """
-        self.send(XAP800_CMD + unitCode + " PP " + channel + EOM)
-        return bool(self.readResponse())
-
-    def setMicEchoCancellerReferenceOutput(self, ecRef, output, unitCode=0):
-        """Set the microphone echo canceller reference output
-
-        unitCode - the unit code of the target XAP800
-        ecRef - the desired reference channel
-                                  1 = EC Ref 1
-                                  2 = EC Ref 2
-                                  3 = G-Link EC Ref bus
-        output - the output channel to reference
-        (1-8, A-D, E to select G-Link Ref Bus, or F
-              to select NONE)
-        """
-        self.send(XAP800_CMD + unitCode + " REFSEL " + ecRef + " " +
-                  output + EOM)
-        return self.readResponse()
-
-    def requestMicEchoCancellerReferenceOutput(self, ecRef, unitCode=0):
-        """Request the microphone echo canceller reference output.
-
-        unitCode - the unit code of the target XAP800
-        ecRef - the desired reference channel
-                                  1 = EC Ref 1
-                                  2 = EC Ref 2
-                                  3 = G-Link EC Ref bus
-        """
-        self.send(XAP800_CMD + unitCode + " REFSEL " + ecRef + EOM)
-        return int(self.readResponse())
-
-    def setScreenTimeout(self, timeInMinutes, unitCode=0):
-        """Sets the screen timeout in minutes.
-
-        The value is limited to 0-50 values outside the boundary
-        will be anchored to the boundaries.
-
-        unitCode - the unit code of the target XAP800
-        timeInMinutes - the timeout value in minutes (1-15, or 0 to disable)
-        """
-        if timeInMinutes < 0:
-            timeInMinutes = 0
-        elif timeInMinutes > 15:
-            timeInMinutes = 15
-        self.send(XAP800_CMD + unitCode + " TOUT " + timeInMinutes + EOM)
-        return int(self.readResponse())
-
-    def requestScreenTimeout(self, unitCode=0):
-        """Request the screen timeout in minutes.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " TOUT" + EOM)
-        return int(self.readResponse())
-
-    def requestVersion(self, unitCode=0):
-        """Request the firmware version of the target XAP800.
-
-        unitCode - the unit code of the target XAP800
-        """
-        self.send(XAP800_CMD + unitCode + " VER" + EOM)
-        return self.readResponse()
-
-    errorDefs = {"ERROR 1": "Out of Memory",
-                 "ERROR 2": "Could not extract a command from\
-                 the string received",
-                 "ERROR 3": "Unknown Command",
-                 "ERROR 4": "N/A - reserved for later use",
-                 "ERROR 5": "Invalid parameter",
-                 "ERROR 6": "Unrecognized command",
-                 "default": "Unknown error - no description found"
-                 }
+    errorDefs = {
+        "ERROR 1": "Out of Memory",
+        "ERROR 2": "Could not extract a command from the string received",
+        "ERROR 3": "Unknown Command",
+        "ERROR 4": "N/A - reserved for later use",
+        "ERROR 5": "Invalid parameter",
+        "ERROR 6": "Unrecognized command",
+        "default": "Unknown error - no description found",
+    }
 
     def getHumanErrorDescription(self, errorMsg):
-        """Translates ERROR replies from the XAP800 into a human-readable description of the problem."""
         return self.errorDefs.get(errorMsg, "Unknown Error")

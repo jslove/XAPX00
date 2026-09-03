@@ -347,6 +347,11 @@ class XAPX00(object):
         self._retry_interval = 10  # seconds between connection attempts when unit is offline
         self._serialconn = None
         self.UID = None
+        # MAXGAIN is static per channel — nothing changes it but setMaxGain —
+        # so cache it rather than re-fetching a constant on every gain write.
+        # Keyed (unitCode, group, channel); cleared on reconnect in case the
+        # unit was reconfigured while we were away.
+        self._maxgain_cache = {}
 
         if connection_type == "telnet":
             if telnet_host is None:
@@ -500,6 +505,8 @@ class XAPX00(object):
             except XAPCommError:
                 if self.connection_type == 'telnet':
                     _LOGGER.warning("No response on telnet; reconnecting and retrying %s", command)
+                    # The unit may have been reconfigured while we were away.
+                    self._maxgain_cache.clear()
                     self._serialconn.reconnect()
                     self._serialconn.write(xapstr.encode())
                     res = self.readResponse(numElements=rtnCount)
@@ -645,10 +652,15 @@ class XAPX00(object):
         """Get max gain setting for a channel."""
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
+        key = (unitCode, group, str(channel))
+        if key in self._maxgain_cache:
+            return self._maxgain_cache[key]
         resp = self.XAPCommand("MAX", channel, group, unitCode=unitCode)
         if is_number(resp):
-            return float(resp)
-        else: 
+            maxdb = float(resp)
+            self._maxgain_cache[key] = maxdb
+            return maxdb
+        else:
             raise XAPCommError
 
     @stereo
@@ -656,8 +668,10 @@ class XAPX00(object):
         """Set max gain setting for a channel."""
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
+        self._maxgain_cache.pop((unitCode, group, str(channel)), None)
         resp = self.XAPCommand("MAX", channel, group, gain, unitCode=unitCode)
         if is_number(resp):
+            self._maxgain_cache[(unitCode, group, str(channel))] = float(resp)
             return resp
         else:
             raise XAPCommError

@@ -127,12 +127,18 @@ def is_number(s):
     else:
         return False
 
+# Guard against log10(0) for a fully muted level, and keep db2linear the
+# inverse of linear2db by applying the same offset in both directions.
+# (Mute is expressed with setMute, not with a gain value; linear2db(0) still
+# clamps to -99 dB rather than returning a defined mute level.)
+_GAIN_EPSILON = 0.000001
+
 def db2linear(db, maxref=0):
     """Convert a db level to a linear level of 0-1.
 
     If maxref is provided, the return value is a proportion of maxref
     """
-    return (10.0 ** ((float(db) + 0.0000001 - maxref) / 20.0))
+    return max(0.0, 10.0 ** ((float(db) - maxref) / 20.0) - _GAIN_EPSILON)
 
 def linear2db(gain, maxref=0):
     """Convert a linear volume level of 0-1 to db.
@@ -141,7 +147,7 @@ def linear2db(gain, maxref=0):
     as a proportion of maxref. This is to allow the use of the
     maxgain level.
     """
-    dbdiff = 20.0 * math.log10(float(gain) + 0.000001)
+    dbdiff = 20.0 * math.log10(float(gain) + _GAIN_EPSILON)
     return min(max(maxref + dbdiff, -99), 99)
 
 class XAPCommError(Exception):

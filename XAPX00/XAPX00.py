@@ -347,7 +347,10 @@ class XAPX00(object):
         self._maxrespdelay = 5
         self._sleeptime   = 0.25
         self.ExpansionChannels = string.ascii_uppercase[string.ascii_uppercase.find('O'):]
-        self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H')]
+        # A-H inclusive: the 880/880T/880TA/8i/SR1212 have eight processing blocks
+        # (Converge Pro manual p.157); the 840T has four (A-D). find('H') is H's own
+        # index, so the old slice stopped at G and dropped the last block.
+        self.ProcessingChannels = string.ascii_uppercase[:string.ascii_uppercase.find('H') + 1]
         self._commlock = Lock()
         self._last_attempt = 0
         self._retry_interval = 10  # seconds between connection attempts when unit is offline

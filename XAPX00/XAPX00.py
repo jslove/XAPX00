@@ -133,6 +133,57 @@ def is_number(s):
 # clamps to -99 dB rather than returning a defined mute level.)
 _GAIN_EPSILON = 0.000001
 
+# How far above a channel's MAXGAIN a requested level may sit before the clamp
+# says so. It exists because of _GAIN_EPSILON above: db2linear applies the
+# offset, so a channel sitting exactly ON its ceiling does not read back a clean
+# 1.0 - it is 1.0000000115 on the 2026.04.22 build and 0.999999 here. A bare
+# `> ceiling` test would therefore log an overshoot of 0.00 dB on every startup
+# for a channel that is exactly where it was asked to be.
+GAIN_CLAMP_TOLERANCE_DB = 0.005
+
+def _clamp_to_ceiling(dbgain, maxdb, channel, group, unitCode):
+    """Hold an absolute gain at the channel's MAXGAIN, and say so if it was over.
+
+    MAXGAIN is not enforced by the hardware. The Converge Pro / XAP reference gives
+    GAIN's only bound as the internal range (-65..20), documents no interaction
+    with MAX, and gives MAX that same range - written to -15.00 with GAIN left at
+    -7.50, the unit simply leaves the level above its own stated maximum. So the
+    ceiling means whatever software makes it mean, and this is where that happens:
+    setPropGain maps a 1.0 level onto MAXGAIN, and without this a caller handing
+    it 10.0 writes +20 dB against a 0 dB ceiling without complaint.
+
+    Relative writes go through _resolve_relative, which reads the current level,
+    applies the delta and lands here - so they are bounded too.
+    """
+    over = dbgain - maxdb
+    if over <= GAIN_CLAMP_TOLERANCE_DB:
+        return dbgain
+    _LOGGER.warning(
+        "Unit %s %s%s: requested %.2f dB is %.2f dB above its %.2f dB MAXGAIN; "
+        "holding at the ceiling", unitCode, group, channel, dbgain, over, maxdb)
+    return maxdb
+
+
+def _relative_target_db(current_db, delta_db, maxdb, channel, group, unitCode):
+    """Turn a relative gain request into a bounded absolute one.
+
+    A delta cannot be clamped as a delta. Shrinking it so current + delta lands
+    exactly on the ceiling does not help, because XAPCommand retries a command
+    after a telnet no-response and a retried RELATIVE write applies its delta a
+    second time - current + 2 * delta, back over the ceiling, with nothing said.
+
+    Resolving against the current level and writing absolute is what actually
+    bounds it, and it makes the write idempotent, so the retry that caused the
+    problem becomes harmless. The cost is one extra round trip to read GAIN, paid
+    only by relative writes; nothing in this library emits one by default.
+
+    The trade is that a concurrent writer's change between the read and the write
+    is overwritten rather than composed with. The Converge allows a single control
+    session, so there is not normally a second writer to lose.
+    """
+    return _clamp_to_ceiling(current_db + delta_db, maxdb, channel, group, unitCode)
+
+
 def db2linear(db, maxref=0):
     """Convert a db level to a linear level of 0-1.
 
@@ -712,6 +763,13 @@ class XAPX00(object):
             raise Exception('Gain not available on Expansion Bus')
         maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
         dbgain = linear2db(gain, maxdb)  # if self.convertDb else gain
+        if isAbsolute == 1:
+            dbgain = _clamp_to_ceiling(dbgain, maxdb, channel, group, unitCode)
+        else:
+            dbgain = _relative_target_db(
+                self._current_gain_db(channel, group, unitCode),
+                dbgain, maxdb, channel, group, unitCode)
+            isAbsolute = 1
         dbgain = "{0:.4f}".format(dbgain)
         _LOGGER.debug("setPropGain: linear:{}, max:{}, db:{}".format( gain, maxdb, dbgain)) 
         resp = self.XAPCommand("GAIN", channel, group, dbgain, "A" if isAbsolute == 1 else "R",
@@ -720,6 +778,17 @@ class XAPX00(object):
             return db2linear(resp, maxdb)
         else:
             raise XAPCommError
+
+    def _current_gain_db(self, channel, group, unitCode):
+        """The channel's GAIN in dB, unconverted.
+
+        getGain applies db2linear when convertDb is set; resolving a relative
+        write needs the raw dB, and needs it without the stereo repeat.
+        """
+        resp = self.XAPCommand("GAIN", channel, group, unitCode=unitCode, rtnCount=2)[0]
+        if is_number(resp):
+            return float(resp)
+        raise XAPCommError
 
     @stereo
     def getGain(self, channel, group="I", unitCode=0):
@@ -749,6 +818,14 @@ class XAPX00(object):
         if group in nogainGroups: #E is expansion, GAIN is set on source unit, so return max
             raise Exception('Gain not available on Expansion Bus')
         gain = linear2db(gain) if self.convertDb else gain
+        maxdb = self.getMaxGain(channel, group, unitCode, stereo=0)
+        if isAbsolute == 1:
+            gain = _clamp_to_ceiling(gain, maxdb, channel, group, unitCode)
+        else:
+            gain = _relative_target_db(
+                self._current_gain_db(channel, group, unitCode),
+                gain, maxdb, channel, group, unitCode)
+            isAbsolute = 1
         gain = "{0:.4f}".format(gain)
         resp = self.XAPCommand("GAIN", channel, group, gain, "A" if isAbsolute == 1 else "R",
                                unitCode=unitCode, rtnCount=2)[0]

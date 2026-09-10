@@ -1,5 +1,5 @@
 __author__='jsl'
-__version__ = '2026.09.08'
+__version__ = '2026.09.10'
 
 from XAPX00.XAPX00 import XAPX00, XAPCommError, XAPRespError
 

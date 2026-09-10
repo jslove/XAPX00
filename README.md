@@ -26,3 +26,29 @@ http://rolfblijleven.blogspot.nl/2015/02/howto-persistent-device-names-on.html
 
 
 
+
+## MAXGAIN is enforced in software, here
+
+The hardware does not enforce it. The Converge Pro 880 reference gives `GAIN`'s
+only bound as the internal range (−65…20 dB), documents no interaction with
+`MAX`, and gives `MAX` that same range. Written to −15.00 with `GAIN` left at
+−7.50, the unit leaves the level above its own stated maximum.
+
+So an absolute `setGain` or `setPropGain` above a channel's `MAXGAIN` is **held
+at the ceiling and logged**, on inputs and outputs alike. The ceiling read is
+cached, so this costs no extra round trip on the volume path.
+
+**Relative writes are bounded too**, and are the case the ceiling matters most
+for. A delta cannot be clamped as a delta: shrinking it so `current + delta`
+lands exactly on the ceiling does not help, because `XAPCommand` retries after a
+telnet no-response and a retried *relative* write applies its delta a second
+time. So `isAbsolute=0` reads the current level, resolves the delta against it,
+clamps, and writes **absolute** — which bounds it and makes the write idempotent,
+so the retry that caused the problem becomes harmless. The cost is one extra
+round trip, paid only by relative writes.
+
+One thing this does not cover:
+
+- **Anything that bypasses the library** — a raw command, G-Ware, the front
+  panel — is unaffected. `GAIN` with no `A`/`R` token is *relative*, so
+  `GAIN 7 O -15` sent by hand drops the channel 15 dB rather than setting it.

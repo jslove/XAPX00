@@ -72,6 +72,11 @@ CP880TATYPE = "CP880TA"
 EOM = "\r"
 DEVICE_MAXMICS = "Max Number of Microphones"
 matrixGeo = {'XAP800': 12, 'XAP400': 8, 'CP880':12, 'CP880T':12, 'CP880TA':12}
+# The command prefix is "#<type><id>", and the type is per MODEL, not per chain:
+# an 880T is "#D<id>" while a plain 880 on the same expansion bus is "#1<id>".
+# A mixed chain therefore needs a prefix per unit, not one for the connection.
+typeCmd = {XAP800TYPE: XAP800_CMD, XAP400TYPE: XAP400_CMD, CP880TYPE: CP880_CMD,
+           CP880TTYPE: CP880T_CMD, CP880TATYPE: CP880TA_CMD}
 nogainGroups = ('E')
 
 def stereo(func):
@@ -353,20 +358,42 @@ class TelnetConnection:
         """Drain any buffered input from the device."""
         self._run(self._async_drain_input())
 
+def parseUnitTypes(unit_types):
+    """{unitCode: type} -> {int: type}, rejecting an unknown type up front.
+
+    Keys may be strings, since this usually arrives from a config text field.
+    """
+    parsed = {}
+    for unit, utype in (unit_types or {}).items():
+        if utype not in typeCmd:
+            raise ValueError("unit_types[%r]: unknown device type %r (one of %s)"
+                             % (unit, utype, ", ".join(typeCmd)))
+        parsed[int(unit)] = utype
+    return parsed
+
+
 class XAPX00(object):
     """XAPX000 Module."""
 
     def __init__(self, comPort="/dev/ttyUSB0", baudRate=38400,
                  stereo=0, XAPType=XAP800TYPE,
                  connection_type="serial", telnet_host=None, telnet_port=23,
-                 telnet_username="clearone", telnet_password="converge"):
+                 telnet_username="clearone", telnet_password="converge",
+                 unit_types=None):
         """Initialize the XAPX00 controller.
 
         Args:
             comPort: Serial port path (used when connection_type="serial").
             baudRate: Baud rate for serial connection (default 38400).
             stereo: Enable stereo mode (repeats commands for paired channels).
-            XAPType: Device type — "XAP800", "XAP400", or "CP880".
+            XAPType: Device type — "XAP800", "XAP400", "CP880", "CP880T" or
+                "CP880TA". Sets the command prefix for every unit on the chain
+                that unit_types does not name.
+            unit_types: Optional {unitCode: type} for a chain of mixed models,
+                e.g. {2: "CP880"} for a plain 880 hanging off two 880Ts. A unit
+                not listed uses XAPType. Without this a mixed chain is
+                unreachable past the first model: "#D2 VER" is never answered
+                by a unit that only listens for "#12".
             connection_type: Transport to use — "serial" or "telnet".
             telnet_host: Hostname or IP address (required for connection_type="telnet").
             telnet_port: Telnet port number (default 23).
@@ -378,16 +405,8 @@ class XAPX00(object):
         self.stereo       = stereo
         self.XAPType      = XAPType
         self.matrixGeo    = matrixGeo[self.XAPType]
-        if XAPType == XAP800TYPE:
-            self.XAPCMD = XAP800_CMD
-        elif XAPType == CP880TYPE:
-            self.XAPCMD = CP880_CMD
-        elif XAPType == CP880TTYPE:
-            self.XAPCMD = CP880T_CMD
-        elif XAPType == CP880TATYPE:
-            self.XAPCMD = CP880TA_CMD
-        else:
-            self.XAPCMD = XAP400_CMD
+        self.XAPCMD       = typeCmd.get(XAPType, XAP400_CMD)
+        self.unit_types   = parseUnitTypes(unit_types)
         self.timeout      = 2
         self.connectionLive = 0
         self.input_range  = range(1, 13)
@@ -545,6 +564,15 @@ class XAPX00(object):
         else:
             return respitems[-numElements:]
         
+    def unitPrefix(self, unitCode=0):
+        """The "#<type>" a command to this unit must start with.
+
+        Per unit, because a chain can mix models and each model answers only
+        to its own type character.
+        """
+        utype = self.unit_types.get(int(unitCode), self.XAPType)
+        return typeCmd.get(utype, self.XAPCMD)
+
     def XAPCommand(self, command, *args, **kwargs):
         """Call command and return value.
 
@@ -557,7 +585,8 @@ class XAPX00(object):
             unitCode = kwargs.get('unitCode', 0)
             rtnCount = kwargs.get('rtnCount', 1)
             args = [str(x) for x in args]
-            xapstr = "%s%s %s %s %s" % (self.XAPCMD, unitCode, command, " ".join(args), EOM)
+            xapstr = "%s%s %s %s %s" % (self.unitPrefix(unitCode), unitCode, command,
+                                        " ".join(args), EOM)
             _LOGGER.debug("sending command: {}".format(xapstr))
             self._serialconn.write(xapstr.encode())
             try:

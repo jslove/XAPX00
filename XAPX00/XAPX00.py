@@ -573,6 +573,46 @@ class XAPX00(object):
         utype = self.unit_types.get(int(unitCode), self.XAPType)
         return typeCmd.get(utype, self.XAPCMD)
 
+    def discoverUnitType(self, unitCode):
+        """Find which model a chained unit is, by asking VER under each prefix.
+
+        A unit answers only its own "#<type><id>", so the prefix that gets a
+        VER reply is the model. The configured type (or an existing override)
+        is tried first, so a correctly described chain costs one command per
+        unit; a wrong guess costs one timeout per model tried. The answer is
+        remembered in unit_types. Returns the type, or None if nothing on the
+        chain answered to that id under any model - off, unplugged from the
+        expansion bus, or set to a different id.
+        """
+        unitCode = int(unitCode)
+        first = self.unit_types.get(unitCode, self.XAPType)
+        candidates = [first] + [t for t in typeCmd if t != first]
+        saved = self.unit_types.get(unitCode)
+        for utype in candidates:
+            self.unit_types[unitCode] = utype
+            try:
+                ver = self.getVersion(unitCode=unitCode)
+            except (XAPCommError, XAPRespError, OSError) as e:
+                _LOGGER.debug("unit %s is not a %s (%s): %s", unitCode, utype,
+                              typeCmd[utype], e)
+                continue
+            if utype != self.XAPType:
+                _LOGGER.info("unit %s answers as %s (%s%s), version %s",
+                             unitCode, utype, typeCmd[utype], unitCode, ver)
+            else:
+                # Same as the connection default - no override needed.
+                self.unit_types.pop(unitCode, None)
+            return utype
+        # Restore whatever was configured rather than leaving the last guess.
+        if saved is None:
+            self.unit_types.pop(unitCode, None)
+        else:
+            self.unit_types[unitCode] = saved
+        _LOGGER.warning("unit %s did not answer VER as any known model (%s); "
+                        "is it powered, on the expansion bus, and set to id %s?",
+                        unitCode, ", ".join(typeCmd), unitCode)
+        return None
+
     def XAPCommand(self, command, *args, **kwargs):
         """Call command and return value.
 

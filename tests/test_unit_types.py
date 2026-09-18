@@ -65,3 +65,48 @@ def test_unit_prefix_accepts_string_keys():
 def test_unknown_type_is_rejected_at_construction():
     with pytest.raises(ValueError):
         WireXAP("CP880T", unit_types={2: "CP999"})
+
+
+class ChainXAP(WireXAP):
+    """A wire with real units on it: {(prefix, id): version}. Anything else times out."""
+
+    def __init__(self, chain, XAPType="CP880T", unit_types=None):
+        super().__init__(XAPType, unit_types)
+        from XAPX00.XAPX00 import XAPCommError
+        outer = self
+
+        class Conn:
+            last = ""
+            def open(self): pass
+            def close(self): pass
+            def write(self, data):
+                outer.sent.append(data.decode()); self.last = data.decode()
+            def readline(self):
+                prefix, _, rest = self.last.partition(" ")
+                if prefix in chain:
+                    return f"OK> {prefix} VER {chain[prefix]}\r\n".encode()
+                raise OSError("timeout")  # what a silent unit looks like
+        self._serialconn = Conn()
+
+
+def test_discover_finds_a_different_model_on_the_chain():
+    x = ChainXAP({"#D0": "4.4.0.31", "#D1": "4.4.0.31", "#12": "4.4.0.31"})
+    assert x.discoverUnitType(2) == "CP880"
+    assert x.unit_types == {2: "CP880"}
+    # And it is used from then on.
+    x.sent.clear(); x.XAPCommand("VER", unitCode=2)
+    assert x.sent[0].startswith("#12 ")
+
+
+def test_discover_tries_the_configured_type_first():
+    x = ChainXAP({"#D1": "4.4.0.31"})
+    assert x.discoverUnitType(1) == "CP880T"
+    assert x.sent == ["#D1 VER  \r"]      # one command, no probing
+    assert x.unit_types == {}             # same as the default: no override kept
+
+
+def test_discover_returns_none_and_keeps_config_when_nothing_answers():
+    x = ChainXAP({"#D0": "4.4.0.31"}, unit_types={2: "CP880"})
+    assert x.discoverUnitType(2) is None
+    assert x.unit_types == {2: "CP880"}   # the operator's word stands
+    assert x.sent[0].startswith("#12 ")   # and was tried first
